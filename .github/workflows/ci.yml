@@ -25,12 +25,15 @@ jobs:
       - name: Run tests
         run: cargo test --verbose
 
-  cross-aarch64:
+    cross-aarch64:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross
-      - name: Build for aarch64 (RPi only crates)
+      - name: Build for aarch64 (RPi-only crates)
         run: |
-          cross build --target aarch64-unknown-linux-gnu -p r2_core -p drivers -p platform_rpi
+          cross build --target aarch64-unknown-linux-gnu \
+            -p robot-core \
+            -p drivers \
+            -p platform_rpi
