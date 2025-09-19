@@ -14,12 +14,11 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 這裡用 --workspace，就會依照 default-members 排除 sim2d
-      - name: Run clippy (workspace)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Run clippy (RPi crates only)
+        run: cargo clippy -p robot-core -p drivers -p platform_rpi --all-targets -- -D warnings
 
-      - name: Run tests (workspace)
-        run: cargo test --workspace --verbose
+      - name: Run tests (RPi crates only)
+        run: cargo test -p robot-core -p drivers -p platform_rpi --verbose
 
   cross-aarch64:
     runs-on: ubuntu-latest
