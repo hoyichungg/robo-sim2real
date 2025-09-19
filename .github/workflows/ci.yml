@@ -11,12 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 建議在 workspace 根目錄加入 default-members 避開 sim2d
-      # default-members = ["r2_core","drivers","platform_rpi"]
+      # 這裡用 --workspace，就會依照 default-members 排除 sim2d
       - name: Run clippy (workspace)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
@@ -27,10 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross
-
       - name: Build for aarch64 (RPi-only crates)
         run: |
           cross build --target aarch64-unknown-linux-gnu \
