@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = "0.14"
+# 關掉 default features（會移除含 ALSA 的音訊）
+bevy = { version = "0.14", default-features = false, features = [
+  "bevy_asset",
+  "bevy_core_pipeline",
+  "bevy_render",
+  "bevy_sprite",
+  "bevy_winit",   # 需要視窗就留，未來做 headless 可拿掉
+  "png",
+] }
 r2_core = { path = "../r2_core", package = "robot-core" }
 drivers = { path = "../drivers" }
