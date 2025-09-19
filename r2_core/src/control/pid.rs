@@ -1,14 +1,16 @@
 #[derive(Debug, Clone)]
 pub struct Pid {
-    pub kp: f32,
-    pub ki: f32,
-    pub kd: f32,
-    pub i: f32,
-    pub prev_e: f32,
-    pub out_min: f32,
-    pub out_max: f32,
-    pub i_min: f32,
-    pub i_max: f32,
+    pub kp: f32, // 比例增益
+    pub ki: f32, // 積分增益
+    pub kd: f32, // 微分增益
+
+    pub i: f32,      // 積分暫存器
+    pub prev_e: f32, // 上一次誤差（給 D 用）
+
+    pub out_min: f32, // 輸出下限（防止過大指令）
+    pub out_max: f32, // 輸出上限
+    pub i_min: f32,   // 積分下限（防 wind-up）
+    pub i_max: f32,   // 積分上限
 }
 
 impl Pid {
@@ -73,4 +75,12 @@ impl Pid {
 
         u
     }
+
+    // 呼叫fn step這個方法：
+    //  1.	算誤差 e = target - measured。
+    //  2.	更新積分 i += e * dt * ki，並強制在 [i_min, i_max] 之間。
+    //  3.	算微分 d = kd * (e - prev_e) / dt，用誤差變化量。
+    //  4.	算比例 p = kp * e。
+    //  5.	合成輸出 u = p + i + d，再強制在 [out_min, out_max] 之間。
+    //  6.	回傳這個 u（通常會是馬達速度命令）。
 }
