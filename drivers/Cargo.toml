@@ -1,0 +1,7 @@
+[package]
+name = "drivers"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+r2_core = { path = "../r2_core", package = "robot-core" }

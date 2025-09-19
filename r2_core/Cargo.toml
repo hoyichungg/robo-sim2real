@@ -1,0 +1,10 @@
+[package]
+name = "robot-core"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "r2_core"      # crate 名
+path = "src/lib.rs"
+
+[dependencies]

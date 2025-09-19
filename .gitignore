@@ -1,0 +1,45 @@
+# === Rust build artifacts ===
+/target
+**/target
+Cargo.lock
+
+# === Bevy / Rapier (assets, cache) ===
+# Bevy asset hot-reload cache
+/assets/.*
+/assets/.DS_Store
+
+# === OS / Editor junk ===
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# === IDEs ===
+.idea/
+.vscode/
+*.iml
+
+# === Logs / temp ===
+*.log
+logs/
+tmp/
+
+# === Cross / Docker build artifacts ===
+.cross/
+.docker/
+
+# === Coverage / profiling ===
+coverage/
+.prof
+.profraw
+.profdata
+
+# === Replay / telemetry dumps ===
+/telemetry/*.csv
+/replays/*.json
+
+# === Node / web (若之後有 web-ui) ===
+node_modules/
+dist/
