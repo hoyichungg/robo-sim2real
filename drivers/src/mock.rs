@@ -1,16 +1,34 @@
 use r2_core::hal::{DistanceSensor, Motor};
+use std::time::Instant;
 
 pub struct MockMotor;
 impl Motor for MockMotor {
     fn set_wheel_speeds(&mut self, left: f32, right: f32) -> Result<(), String> {
-        println!("[MockMotor] left={:.2}, right={:.2}", left, right);
+        println!("[MockMotor] left={left:.2}, right={right:.2}");
         Ok(())
     }
 }
 
-pub struct MockSensor;
+pub struct MockSensor {
+    t0: Instant,
+}
+impl Default for MockSensor {
+    fn default() -> Self {
+        Self { t0: Instant::now() }
+    }
+}
 impl DistanceSensor for MockSensor {
     fn distance_m(&mut self) -> Result<f32, String> {
-        Ok(1.0) // always 1 meter
+        let t = self.t0.elapsed().as_secs_f32();
+        // 0~2s: 1.0m；2~6s 線性降到 0.1m；之後維持 0.1m
+        let d = if t < 2.0 {
+            1.0
+        } else if t < 6.0 {
+            let k = (t - 2.0) / 4.0;
+            1.0 * (1.0 - k) + 0.1 * k
+        } else {
+            0.1
+        };
+        Ok(d)
     }
 }
