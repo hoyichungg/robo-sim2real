@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 fn main() {
     let mut motor = MockMotor;
-    let mut sensor = MockSensor::default();
+    let mut sensor = MockSensor::new();
 
     let pid = Pid::new(1.0, 0.5, 0.05)
         .with_output_limits(-1.0, 1.0)

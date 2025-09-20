@@ -12,15 +12,15 @@ impl Motor for MockMotor {
 pub struct MockSensor {
     t0: Instant,
 }
-impl Default for MockSensor {
-    fn default() -> Self {
+impl MockSensor {
+    pub fn new() -> Self {
         Self { t0: Instant::now() }
     }
 }
 impl DistanceSensor for MockSensor {
     fn distance_m(&mut self) -> Result<f32, String> {
         let t = self.t0.elapsed().as_secs_f32();
-        // 0~2s: 1.0m；2~6s 線性降到 0.1m；之後維持 0.1m
+        // 0~2s: 固定 1.0m；2~6s 線性下降到 0.1m；之後保持 0.1m
         let d = if t < 2.0 {
             1.0
         } else if t < 6.0 {
