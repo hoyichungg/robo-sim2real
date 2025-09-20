@@ -17,6 +17,11 @@ impl MockSensor {
         Self { t0: Instant::now() }
     }
 }
+impl Default for MockSensor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl DistanceSensor for MockSensor {
     fn distance_m(&mut self) -> Result<f32, String> {
         let t = self.t0.elapsed().as_secs_f32();
