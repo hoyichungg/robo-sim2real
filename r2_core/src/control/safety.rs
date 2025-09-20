@@ -57,10 +57,10 @@ impl FailSafe {
 
     /// 人為解除（v0 不自動解除）。只有在距離已> threshold + hysteresis 時才回到 Run。
     pub fn reset(&mut self, current_distance_m: Option<f32>) {
-        if let Some(d) = current_distance_m {
-            if d.is_finite() && d > self.threshold_m + self.hysteresis_m {
-                self.state = SafetyState::Run;
-            }
+        if current_distance_m
+            .is_some_and(|d| d.is_finite() && d > self.threshold_m + self.hysteresis_m)
+        {
+            self.state = SafetyState::Run;
         }
     }
 
