@@ -24,7 +24,8 @@ fn main() {
     let dt = Duration::from_secs_f32(1.0 / hz as f32);
     let desired_v = 0.6_f32;
 
-    let mut last = Instant::now();
+    let t0 = Instant::now();
+    let mut last = t0;
     let mut log: Vec<Telemetry> = Vec::new();
 
     let seconds = 10.0;
@@ -33,14 +34,18 @@ fn main() {
         let dt_s = (now - last).as_secs_f32().clamp(0.0, 0.05);
         last = now;
 
+        let t_sec = (now - t0).as_secs_f32();
+
         let dist_val = sensor.distance_m().map_err(|_| ());
         let ((l, r), st) = ctrl.tick(desired_v, dt_s, dist_val);
 
         let dist_dbg = dist_val.unwrap_or(f32::NAN);
-        let _ = motor.set_wheel_speeds(l, r);
+        if let Err(e) = motor.set_wheel_speeds(l, r) {
+            eprintln!("motor error: {e}");
+        }
 
         log.push(Telemetry {
-            t: last.elapsed().as_secs_f32(),
+            t: t_sec,
             dt: dt_s,
             desired_v,
             left: l,
