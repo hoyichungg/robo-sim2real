@@ -58,7 +58,7 @@ fn main() {
     let mut ctrl = Controller::new(pid, kin, safety);
 
     let hz = args.hz.max(1.0);
-    let dt = Duration::from_secs_f32(1.0 / hz as f32);
+    let dt = Duration::from_secs_f32(1.0 / hz);
     let desired_v = args.desired_v;
 
     let t0 = Instant::now();
