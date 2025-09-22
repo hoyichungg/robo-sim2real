@@ -2,7 +2,10 @@ use drivers::mock::{MockMotor, MockSensor};
 use r2_core::control::controller::{Controller, DifferentialKinematics};
 use r2_core::control::pid::Pid;
 use r2_core::control::safety::FailSafe;
+use r2_core::control::telemetry::Telemetry;
 use r2_core::hal::{DistanceSensor, Motor};
+use std::fs::File;
+use std::io::Write;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -20,33 +23,46 @@ fn main() {
     let hz = 50.0;
     let dt = Duration::from_secs_f32(1.0 / hz as f32);
     let desired_v = 0.6_f32;
-    let seconds = 10.0; // 模擬總時長
 
     let mut last = Instant::now();
-    for _ in 0..(hz as usize * seconds as usize) {
-        // 計算 dt 並夾住避免抖動
-        let now = Instant::now();
-        let mut dt_s = (now - last).as_secs_f32();
-        last = now;
-        dt_s = dt_s.clamp(0.0, 0.05);
+    let mut log: Vec<Telemetry> = Vec::new();
 
-        // 讀取距離
+    let seconds = 10.0;
+    for _ in 0..(hz as usize * seconds as usize) {
+        let now = Instant::now();
+        let dt_s = (now - last).as_secs_f32().clamp(0.0, 0.05);
+        last = now;
+
         let dist_val = sensor.distance_m().map_err(|_| ());
         let ((l, r), st) = ctrl.tick(desired_v, dt_s, dist_val);
 
-        // 印出 debug 資訊（包含距離）
         let dist_dbg = dist_val.unwrap_or(f32::NAN);
-        println!(
-            "dt={dt_s:.3}s d={dist_dbg:.2} v_des={desired_v:.2} -> (L={l:.2}, R={r:.2}) state={st:?}"
-        );
+        let _ = motor.set_wheel_speeds(l, r);
 
-        // 設定馬達
-        if let Err(e) = motor.set_wheel_speeds(l, r) {
-            eprintln!("motor error: {e}");
-        }
+        log.push(Telemetry {
+            t: last.elapsed().as_secs_f32(),
+            dt: dt_s,
+            desired_v,
+            left: l,
+            right: r,
+            distance: dist_dbg,
+            state: format!("{:?}", st),
+        });
 
         thread::sleep(dt);
     }
 
-    println!("Done.");
+    // 寫出 CSV
+    let mut file = File::create("telemetry.csv").expect("cannot create file");
+    writeln!(file, "t,dt,desired_v,left,right,distance,state").unwrap();
+    for row in log {
+        writeln!(
+            file,
+            "{:.3},{:.3},{:.2},{:.2},{:.2},{:.2},{}",
+            row.t, row.dt, row.desired_v, row.left, row.right, row.distance, row.state
+        )
+        .unwrap();
+    }
+
+    println!("Telemetry saved to telemetry.csv");
 }
