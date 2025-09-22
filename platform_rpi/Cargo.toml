@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 r2_core = { path = "../r2_core", package = "robot-core" }
 drivers = { path = "../drivers" }
+clap = { version = "4.5", features = ["derive"] }
