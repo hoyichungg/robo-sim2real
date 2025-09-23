@@ -131,7 +131,7 @@ fn main() {
 
         // bench 模式：用控制輸出驅動內部一階模型
         if args.bench {
-            let alpha = (1.0 - (-dt_s / tau).exp()) as f32; // 離散一階
+            let alpha = 1.0 - (-dt_s / tau).exp();
             let v_cmd_l = gain * l;
             let v_cmd_r = gain * r;
             v_meas_l += alpha * (v_cmd_l - v_meas_l);
