@@ -11,8 +11,30 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # 安裝 stable toolchain
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+
+      # 可選：快取 cargo，加速依賴下載/編譯
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # 裝 clippy / rustfmt（toolchain action 不會自動裝 components）
+      - name: Install clippy & rustfmt
+        run: |
+          rustup component add clippy
+          rustup component add rustfmt
 
       - name: Run clippy (RPi crates only)
         run: cargo clippy -p robot-core -p drivers -p platform_rpi --all-targets -- -D warnings
@@ -24,8 +46,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # 一樣指定 stable，確保環境一致
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # 可選：快取，加速 cross build（仍會用到 target/）
+      - name: Cache cargo registry + build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-cross-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-cross-
+
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross
+
+      # cross 使用 docker 映像，不一定需要 rustup target，
+      # 但裝一下也無妨（若未使用 cross 也能直接 cargo build）
+      - name: Add aarch64 target (optional)
+        run: rustup target add aarch64-unknown-linux-gnu
+
       - name: Build for aarch64 (RPi-only crates)
         run: |
           cross build --target aarch64-unknown-linux-gnu \
