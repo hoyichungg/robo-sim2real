@@ -52,3 +52,20 @@ pub fn desired_v(
         Some(VProfile::Sin) => params.sin_bias + params.sin_amp * (TAU * params.sin_freq * t).sin(),
     }
 }
+
+#[derive(Debug)]
+pub struct Telemetry {
+    pub t: f32,         // 時間戳 (秒)
+    pub dt: f32,        // 這次迴圈時間 (秒)
+    pub desired_v: f32, // 目標速度
+    pub left: f32,      // 左輪輸出（已套用自適應後）
+    pub right: f32,     // 右輪輸出（已套用自適應後）
+    pub distance: f32,  // 感測距離
+    pub state: String,  // FailSafe 狀態
+
+    pub meas_left: f32,  // bench 模式產生的左輪「量測速度」
+    pub meas_right: f32, // bench 模式產生的右輪「量測速度」
+
+    pub err: f32,        // 當下（平均）速度誤差：desired_v - v_meas_avg
+    pub adapt_gain: f32, // 當下自適應輸出增益（沒開 adaptive 時為 1.0）
+}

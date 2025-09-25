@@ -1,9 +1,9 @@
+use crate::profile::Telemetry;
 use clap::Parser;
 use drivers::mock::{MockMotor, MockSensor};
 use r2_core::control::controller::{Controller, DifferentialKinematics};
 use r2_core::control::pid::Pid;
 use r2_core::control::safety::FailSafe;
-use r2_core::control::telemetry::Telemetry;
 use r2_core::hal::{DistanceSensor, Motor};
 use std::fs::File;
 use std::io::Write;
@@ -45,7 +45,7 @@ struct Args {
     #[arg(long, default_value_t = 0.05)]
     hysteresis: f32,
 
-    /// Output CSV path (default: telemetry.csv in CWD)
+    /// Output CSV file name (會被寫進 run/ 資料夾)
     #[arg(long)]
     csv: Option<PathBuf>,
 
@@ -80,6 +80,35 @@ struct Args {
     /// bench 模型增益 (u→v)
     #[arg(long, default_value_t = 0.6)]
     bench_gain: f32,
+
+    /// 啟用誤差導向的自適應輸出增益
+    #[arg(long, default_value_t = false)]
+    adaptive: bool,
+
+    /// |error| ≤ e_small 時使用 gain_min
+    #[arg(long, default_value_t = 0.02)]
+    e_small: f32,
+    /// |error| ≥ e_large 時使用 gain_max
+    #[arg(long, default_value_t = 0.20)]
+    e_large: f32,
+
+    /// 最小 / 最大輸出增益（線性內插）
+    #[arg(long, default_value_t = 0.6)]
+    gain_min: f32,
+    #[arg(long, default_value_t = 1.2)]
+    gain_max: f32,
+}
+
+/// 將 |e| 在 [e_small, e_large] 映射到 [g_min, g_max]（外側 clamp）
+fn map_gain(abs_e: f32, e_small: f32, e_large: f32, g_min: f32, g_max: f32) -> f32 {
+    if abs_e <= e_small {
+        g_min
+    } else if abs_e >= e_large {
+        g_max
+    } else {
+        let r = (abs_e - e_small) / (e_large - e_small + 1e-12);
+        g_min + r * (g_max - g_min)
+    }
 }
 
 fn main() {
@@ -127,61 +156,114 @@ fn main() {
 
         // 感測 + 控制
         let dist_val = sensor.distance_m().map_err(|_| ());
-        let ((l, r), st) = ctrl.tick(desired_v, dt_s, dist_val);
+        let ((l_raw, r_raw), st) = ctrl.tick(desired_v, dt_s, dist_val);
 
-        // bench 模式：用控制輸出驅動內部一階模型
+        // bench：用控制輸出驅動一階模型 → 產生「量測速度」
         if args.bench {
-            let alpha = 1.0 - (-dt_s / tau).exp();
-            let v_cmd_l = gain * l;
-            let v_cmd_r = gain * r;
+            let alpha = (1.0 - (-dt_s / tau).exp()) as f32; // 離散一階
+            let v_cmd_l = gain * l_raw;
+            let v_cmd_r = gain * r_raw;
             v_meas_l += alpha * (v_cmd_l - v_meas_l);
             v_meas_r += alpha * (v_cmd_r - v_meas_r);
         }
 
+        // 估測誤差（有 meas 用 meas，否則用簡單近似）
+        let v_meas_avg = if args.bench {
+            0.5 * (v_meas_l + v_meas_r)
+        } else {
+            gain * 0.5 * (l_raw + r_raw)
+        };
+        let err = desired_v - v_meas_avg;
+        let abs_e = err.abs();
+
+        // 自適應輸出增益（未開啟則為 1.0）
+        let adapt = if args.adaptive {
+            map_gain(
+                abs_e,
+                args.e_small,
+                args.e_large,
+                args.gain_min,
+                args.gain_max,
+            )
+        } else {
+            1.0
+        };
+
+        // 實際下給馬達的命令（已套用自適應）並夾限
+        let l_cmd = (l_raw * adapt).clamp(-1.0, 1.0);
+        let r_cmd = (r_raw * adapt).clamp(-1.0, 1.0);
+
         // 驅動馬達（mock）
         let dist_dbg = dist_val.unwrap_or(f32::NAN);
-        if let Err(e) = motor.set_wheel_speeds(l, r) {
+        if let Err(e) = motor.set_wheel_speeds(l_cmd, r_cmd) {
             eprintln!("motor error: {e}");
         }
         if !args.quiet {
             println!(
                 "t={t_sec:5.2}s dt={dt_s:.3}s d={dist_dbg:.2} v_des={desired_v:.2} \
-                -> (L={l:.2}, R={r:.2}) state={st:?} meas=({:.2},{:.2})",
-                v_meas_l, v_meas_r
+                -> (L={l_cmd:.2}, R={r_cmd:.2}) state={st:?} meas=({:.2},{:.2}) e={:.3} gain={:.2}",
+                v_meas_l, v_meas_r, err, adapt
             );
         }
 
-        // 記錄
+        // 記錄：把 err / adapt_gain 一併寫入
         log.push(Telemetry {
             t: t_sec,
             dt: dt_s,
             desired_v,
-            left: l,
-            right: r,
+            left: l_cmd,
+            right: r_cmd,
             distance: dist_dbg,
             state: format!("{:?}", st),
             meas_left: if args.bench { v_meas_l } else { f32::NAN },
             meas_right: if args.bench { v_meas_r } else { f32::NAN },
+            err,
+            adapt_gain: adapt,
         });
 
         std::thread::sleep(dt);
     }
 
-    // 輸出 CSV
-    let csv_path = args.csv.unwrap_or_else(|| PathBuf::from("telemetry.csv"));
+    // === 輸出 CSV ===
+    // 若未指定，預設寫到 run/telemetry.csv
+    let csv_path = args
+        .csv
+        .unwrap_or_else(|| PathBuf::from("run/telemetry.csv"));
+
+    // 確保資料夾存在
+    if let Some(parent) = csv_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).expect("failed to create CSV parent dir");
+        }
+    }
+
     let mut file = File::create(&csv_path).expect("cannot create telemetry csv");
+
+    // Header 含 err, adapt_gain
     writeln!(
         file,
-        "t,dt,desired_v,left,right,distance,state,meas_left,meas_right"
+        "t,dt,desired_v,left,right,distance,state,meas_left,meas_right,err,adapt_gain"
     )
     .unwrap();
+
+    // 每列也寫入 err / adapt_gain（meas_* 沒開 bench 就寫 NaN）
     for row in log {
         let ml = if args.bench { row.meas_left } else { f32::NAN };
         let mr = if args.bench { row.meas_right } else { f32::NAN };
         writeln!(
             file,
-            "{:.3},{:.3},{:.2},{:.2},{:.2},{:.2},{},{:.3},{:.3}",
-            row.t, row.dt, row.desired_v, row.left, row.right, row.distance, row.state, ml, mr
+            "{:.3},{:.3},{:.2},{:.2},{:.2},{:.2},{},{:.3},{:.3},{:.4},{:.3}",
+            row.t,
+            row.dt,
+            row.desired_v,
+            row.left,
+            row.right,
+            row.distance,
+            row.state,
+            ml,
+            mr,
+            row.err,
+            row.adapt_gain
         )
         .unwrap();
     }
