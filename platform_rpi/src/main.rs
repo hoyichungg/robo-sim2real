@@ -160,7 +160,7 @@ fn main() {
 
         // bench：用控制輸出驅動一階模型 → 產生「量測速度」
         if args.bench {
-            let alpha = (1.0 - (-dt_s / tau).exp()) as f32; // 離散一階
+            let alpha = 1.0 - (-dt_s / tau).exp();
             let v_cmd_l = gain * l_raw;
             let v_cmd_r = gain * r_raw;
             v_meas_l += alpha * (v_cmd_l - v_meas_l);
