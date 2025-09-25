@@ -231,10 +231,11 @@ fn main() {
         .unwrap_or_else(|| PathBuf::from("run/telemetry.csv"));
 
     // 確保資料夾存在
-    if let Some(parent) = csv_path.parent() {
-        if !parent.as_os_str().is_empty() {
+    match csv_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => {
             std::fs::create_dir_all(parent).expect("failed to create CSV parent dir");
         }
+        _ => {}
     }
 
     let mut file = File::create(&csv_path).expect("cannot create telemetry csv");
