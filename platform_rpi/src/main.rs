@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 mod profile;
 use profile::{ProfileParams, VProfile};
 
+mod adaptive;
+use adaptive::map_gain;
+
 /// Run the minimal control loop (PID + FailSafe) with mock drivers.
 #[derive(Parser, Debug)]
 #[command(name = "platform_rpi", author, version, about)]
@@ -97,18 +100,6 @@ struct Args {
     gain_min: f32,
     #[arg(long, default_value_t = 1.2)]
     gain_max: f32,
-}
-
-/// 將 |e| 在 [e_small, e_large] 映射到 [g_min, g_max]（外側 clamp）
-fn map_gain(abs_e: f32, e_small: f32, e_large: f32, g_min: f32, g_max: f32) -> f32 {
-    if abs_e <= e_small {
-        g_min
-    } else if abs_e >= e_large {
-        g_max
-    } else {
-        let r = (abs_e - e_small) / (e_large - e_small + 1e-12);
-        g_min + r * (g_max - g_min)
-    }
 }
 
 fn main() {
