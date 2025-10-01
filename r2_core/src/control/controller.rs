@@ -1,18 +1,7 @@
 use crate::control::pid::Pid;
 use crate::control::safety::{FailSafe, SafetyState};
 
-/// 差速運動學（先只用線速度；角速度之後加）
-#[derive(Debug, Clone, Copy)]
-pub struct DifferentialKinematics {
-    pub wheel_base_m: f32,
-}
-impl DifferentialKinematics {
-    pub fn to_wheel_speeds(&self, v_mps: f32, w_rps: f32) -> (f32, f32) {
-        let l = v_mps - 0.5 * w_rps * self.wheel_base_m;
-        let r = v_mps + 0.5 * w_rps * self.wheel_base_m;
-        (l, r)
-    }
-}
+pub use crate::model::DifferentialKinematics;
 
 #[derive(Debug)]
 pub struct Controller {

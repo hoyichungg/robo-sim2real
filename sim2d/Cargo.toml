@@ -1,17 +1,34 @@
 [package]
 name = "sim2d"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+[features]
+# 預設有視窗；若要 headless CI/記錄可用 --no-default-features
+default = ["view"]
+view = ["bevy/bevy_winit"]
+rapier = ["bevy_rapier2d"]
 
 [dependencies]
-# 關掉 default features（會移除含 ALSA 的音訊）
+# 關掉大量預設功能，保留最小繪圖與精靈
 bevy = { version = "0.14", default-features = false, features = [
   "bevy_asset",
   "bevy_core_pipeline",
   "bevy_render",
   "bevy_sprite",
-  "bevy_winit",   # 需要視窗就留，未來做 headless 可拿掉
   "png",
 ] }
+
+# 選配：2D 物理（先關掉，等你要真實碰撞/剛體時再開）
+bevy_rapier2d = { version = "0.27", default-features = false, features = [
+  "dim2",
+], optional = true }
+
+# 你現有的控制/驅動抽象（已在專案中）
 r2_core = { path = "../r2_core", package = "robot-core" }
 drivers = { path = "../drivers" }
+
+# CLI & CSV
+clap = { version = "4.5", features = ["derive"] }
+csv = "1.3"
+serde = { version = "1.0", features = ["derive"] }

@@ -38,8 +38,12 @@ impl FailSafe {
             (_, Some(d)) if d <= self.threshold_m => {
                 self.state = SafetyState::EmergencyBrake;
             }
-            // 已急停且距離回升到安全區，轉為 SafeStop（保持 0）
-            (SafetyState::EmergencyBrake, Some(d)) if d > self.threshold_m => {
+            // 自動解除條件：距離 > threshold + hysteresis → 回到 Run
+            (_, Some(d)) if d > self.threshold_m + self.hysteresis_m => {
+                self.state = SafetyState::Run;
+            }
+            // 已急停但尚未超過 hysteresis → SafeStop（保持 0）
+            (SafetyState::EmergencyBrake, Some(_)) => {
                 self.state = SafetyState::SafeStop;
             }
             _ => {}

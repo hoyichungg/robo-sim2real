@@ -5,6 +5,7 @@ pub struct Command {
     pub brake: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct DifferentialKinematics {
     pub wheel_base_m: f32,
 }

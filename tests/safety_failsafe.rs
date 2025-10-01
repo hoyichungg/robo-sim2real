@@ -34,18 +34,15 @@ fn threshold_triggers_and_safe_stop_holds_zero() {
 }
 
 #[test]
-fn reset_requires_hysteresis_margin() {
+fn auto_reset_after_hysteresis_margin() {
     let mut fs = FailSafe::new(0.25, 0.05);
-    fs.update(Ok(0.1)); // emergency
-    fs.update(Ok(0.4)); // safe stop
+    assert_eq!(fs.update(Ok(0.10)), SafetyState::EmergencyBrake);
 
-    // 還沒超過 threshold + hysteresis (=0.30)，不應解除
-    fs.reset(Some(0.29));
-    assert_ne!(fs.state(), SafetyState::Run);
+    // 介於 threshold 與 threshold+hysteresis → 停留 SafeStop
+    assert_eq!(fs.update(Ok(0.28)), SafetyState::SafeStop);
 
-    // 超過 0.30 才能解除
-    fs.reset(Some(0.31));
-    assert_eq!(fs.state(), SafetyState::Run);
+    // 超過 threshold+hysteresis (=0.30) → 自動回到 Run
+    assert_eq!(fs.update(Ok(0.31)), SafetyState::Run);
 }
 
 #[test]
