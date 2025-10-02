@@ -10,7 +10,7 @@ mod resources;
 mod sensing;
 
 use components::*;
-use config::Cli;
+use config::{Cli, RuntimeCfg};
 use control::control_step;
 use physics::integrate_kinematics;
 use resources::{DistanceSense, SimClock, TelemetryWriter};
@@ -62,7 +62,7 @@ fn spawn_camera(mut commands: Commands) {
     commands.spawn(Camera2dBundle::default());
 }
 
-fn spawn_scene(mut commands: Commands) {
+fn spawn_scene(mut commands: Commands, cfg: Res<RuntimeCfg>) {
     // 車
     commands.spawn((
         Car,
@@ -80,19 +80,33 @@ fn spawn_scene(mut commands: Commands) {
         },
     ));
 
-    // 障礙（灰）
-    commands.spawn((
-        Obstacle,
-        SpriteBundle {
-            sprite: Sprite {
-                color: Color::srgb(0.5, 0.5, 0.5), // Color::GRAY 在 0.14 沒有常數，改用 srgb
-                custom_size: Some(Vec2::new(80.0, 80.0)),
+    // 多障礙（CLI 提供座標；若未提供則給預設三個）
+    let mut list: Vec<Vec2> = if cfg.obstacles.is_empty() {
+        vec![Vec2::new(300.0, 0.0), Vec2::new(350.0, 120.0), Vec2::new(420.0, -100.0)]
+    } else {
+        cfg.obstacles.clone()
+    };
+    let colors = [
+        Color::srgb(0.6, 0.6, 0.6),
+        Color::srgb(0.7, 0.5, 0.5),
+        Color::srgb(0.5, 0.7, 0.5),
+        Color::srgb(0.5, 0.5, 0.8),
+    ];
+    for (i, p) in list.drain(..).enumerate() {
+        let col = colors[i % colors.len()];
+        commands.spawn((
+            Obstacle,
+            SpriteBundle {
+                sprite: Sprite {
+                    color: col,
+                    custom_size: Some(Vec2::new(80.0, 80.0)),
+                    ..default()
+                },
+                transform: Transform::from_translation(Vec3::new(p.x, p.y, 0.0)),
                 ..default()
             },
-            transform: Transform::from_xyz(300.0, 0.0, 0.0),
-            ..default()
-        },
-    ));
+        ));
+    }
 }
 
 fn tick_clock(time: Res<Time<Fixed>>, mut clk: ResMut<SimClock>) {

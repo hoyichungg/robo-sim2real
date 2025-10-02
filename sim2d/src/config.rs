@@ -19,7 +19,7 @@ pub struct Cli {
     pub kp: f32,
     #[arg(long, default_value_t = 0.05)]
     pub ki: f32,
-    #[arg(long, default_value_t = 0.04)]
+    #[arg(long, default_value_t = 0.0)]
     pub kd: f32,
 
     /// 速度曲線
@@ -40,6 +40,10 @@ pub struct Cli {
     pub threshold: f32,
     #[arg(long, default_value_t = 0.05)]
     pub hysteresis: f32,
+
+    /// 感測安全緩衝比例（相對於車長），例如 0.1 即扣除 10% 車長
+    #[arg(long = "safety-margin-ratio", default_value_t = 0.1)]
+    pub safety_margin_ratio: f32,
 
     /// Adaptive
     #[arg(long, default_value_t = false)]
@@ -66,6 +70,11 @@ pub struct Cli {
     /// CSV 輸出
     #[arg(long, default_value = "run/sim.csv")]
     pub csv: PathBuf,
+
+    /// 多障礙座標（可重複）：格式 "x,y"（世界座標，像素）
+    /// 例：--obstacle 300,0 --obstacle 350,120
+    #[arg(long = "obstacle", value_name = "X,Y")]
+    pub obstacles: Vec<String>,
 }
 
 #[derive(Resource, Debug, Clone)]
@@ -82,6 +91,7 @@ pub struct RuntimeCfg {
     pub sin_bias: f32,
     pub threshold: f32,
     pub hysteresis: f32,
+    pub safety_margin_ratio: f32,
     pub adaptive: bool,
     pub e_small: f32,
     pub e_large: f32,
@@ -91,10 +101,20 @@ pub struct RuntimeCfg {
     pub plant_gain: f32,
     pub px_per_m: f32,
     pub csv: String,
+    pub obstacles: Vec<Vec2>,
 }
 
 impl Cli {
     pub fn to_runtime(&self) -> RuntimeCfg {
+        fn parse_xy(s: &str) -> Option<Vec2> {
+            let parts: Vec<_> = s.split(',').collect();
+            if parts.len() != 2 { return None; }
+            let x: f32 = parts[0].trim().parse().ok()?;
+            let y: f32 = parts[1].trim().parse().ok()?;
+            Some(Vec2::new(x, y))
+        }
+        let obstacles = self.obstacles.iter().filter_map(|s| parse_xy(s)).collect();
+
         RuntimeCfg {
             hz: self.hz,
             desired_v: self.desired_v,
@@ -108,6 +128,7 @@ impl Cli {
             sin_bias: self.sin_bias,
             threshold: self.threshold,
             hysteresis: self.hysteresis,
+            safety_margin_ratio: self.safety_margin_ratio,
             adaptive: self.adaptive,
             e_small: self.e_small,
             e_large: self.e_large,
@@ -117,6 +138,7 @@ impl Cli {
             plant_gain: self.plant_gain,
             px_per_m: self.px_per_m,
             csv: self.csv.to_string_lossy().to_string(),
+            obstacles,
         }
     }
 }

@@ -7,3 +7,7 @@ edition = "2024"
 r2_core = { path = "../r2_core", package = "robot-core" }
 drivers = { path = "../drivers" }
 clap = { version = "4.5", features = ["derive"] }
+
+[features]
+# 啟用時會同步開啟 drivers 的 rpi 實機驅動
+rpi = ["drivers/rpi"]

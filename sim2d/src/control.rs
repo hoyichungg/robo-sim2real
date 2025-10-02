@@ -49,7 +49,8 @@ pub fn control_step(
 
     // 自適應增益
     if cfg.adaptive {
-        let ae = (cfg.desired_v - v_meas).abs();
+        // 以「當下目標」計算誤差大小，避免使用常數 desired_v 導致估計偏差
+        let ae = (v_des - v_meas).abs();
         let gain = map_gain(ae, cfg.e_small, cfg.e_large, cfg.gain_min, cfg.gain_max);
         st.adapt_gain = gain;
         u *= gain;

@@ -27,7 +27,12 @@ impl FailSafe {
 
     /// 將任何錯誤/NaN/負值視為危險。
     pub fn update(&mut self, distance: Result<f32, ()>) -> SafetyState {
-        let d_ok = distance.ok().filter(|d| d.is_finite()).map(|d| d.max(0.0)); // clamp 負值
+        // 接受 +∞ 表示「非常遠」；NaN 或錯誤視為危險；負值視為 0
+        let d_ok = match distance {
+            Ok(d) if d.is_nan() => None,
+            Ok(d) => Some(d.max(0.0)),
+            Err(_) => None,
+        };
 
         match (self.state, d_ok) {
             // 任何錯誤 → 急停
@@ -39,6 +44,7 @@ impl FailSafe {
                 self.state = SafetyState::EmergencyBrake;
             }
             // 自動解除條件：距離 > threshold + hysteresis → 回到 Run
+            // 包含 +∞ 的情況（代表非常遠）
             (_, Some(d)) if d > self.threshold_m + self.hysteresis_m => {
                 self.state = SafetyState::Run;
             }
@@ -71,8 +77,9 @@ impl FailSafe {
     /// 輔助：用 Option 表示距離（None=錯誤）
     pub fn update_opt(&mut self, distance: Option<f32>) -> SafetyState {
         match distance {
-            Some(d) if d.is_finite() => self.update(Ok(d)),
-            _ => self.update(Err(())),
+            Some(d) if d.is_nan() => self.update(Err(())),
+            Some(d) => self.update(Ok(d)),
+            None => self.update(Err(())),
         }
     }
 }

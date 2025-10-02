@@ -20,9 +20,14 @@ cargo run -p platform_rpi -- \
 ```bash
 cargo run -p sim2d -- \
   --hz 100 -v 0.6 \
-  --v-profile sin --sin-amp 0.3 --sin-freq 0.2 --sin-bias 0.4
-# 預設輸出：run/sim.csv
+  --v-profile sin --sin-amp 0.3 --sin-freq 0.2 --sin-bias 0.4 \
+  --safety-margin-ratio 0.1 \
+  --obstacle 300,0 --obstacle 350,120 --obstacle 420,-100
+# 預設輸出：run/sim.csv（可用 --csv 指定）
 ```
+
+- `--safety-margin-ratio`：感測距離扣除「車長 × 比例」做保守緩衝（預設 0.1）。
+- `--obstacle X,Y`：可重複提供多個障礙座標（像素）。未提供時有 3 個預設位置。
 
 ## 繪圖（單檔）
 

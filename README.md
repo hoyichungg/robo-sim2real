@@ -48,6 +48,13 @@ cargo run -p sim2d
 ➡ You should see a differential-drive robot moving forward.
 If it gets too close to an obstacle, the fail-safe triggers and stops the robot.
 
+# Advanced: with safety margin and multiple obstacles
+cargo run -p sim2d -- \
+  --hz 100 -v 0.6 \
+  --v-profile sin --sin-amp 0.3 --sin-freq 0.2 --sin-bias 0.4 \
+  --safety-margin-ratio 0.1 \
+  --obstacle 300,0 --obstacle 350,120 --obstacle 420,-100
+
 ⸻
 
 Run with Raspberry Pi (stub drivers)
@@ -74,6 +81,23 @@ cargo test
 
 ⸻
 
+## 🔧 PID Tuning (sim2d)
+
+- Defaults (sim2d CLI): `--kp 0.6 --ki 0.05 --kd 0.0`（保守穩定，建議由此起步）
+- Working example at 100 Hz（較快 plant）
+  - `--kp 0.8 --ki 0.2 --kd 0.0 --tau 0.2 --plant-gain 1.0`
+- Suggested ranges by control loop rate（依模型與目標調整）
+  - 50 Hz：`kp 0.6–0.8`、`ki 0.03–0.10`、`kd 0.0–0.005`
+  - 100 Hz：`kp 0.6–1.0`、`ki 0.05–0.20`、`kd 0.0–0.010`
+  - 200 Hz：`kp 0.4–0.8`、`ki 0.02–0.10`、`kd 0.0–0.020`
+- Heuristics
+  - 初期先把 `kd=0`；若需要加速抑制超調，再很小幅度加 D。
+  - 若輸出在 ±1 之間來回跳（抖動/打頂）：減小 `kp` 或將 `kd` 調回 0。
+  - 上升太慢：增加 `kp` 或 `ki`；超調太大：降低 `kp` 或微量加入 `kd`。
+  - 植物一階模型：`tau` 越小反應越快，`plant-gain` 建議 1.0 起步。
+- Example（100 Hz）
+  - `cargo run -p sim2d -- --hz 100 -v 0.6 --kp 0.8 --ki 0.2 --kd 0.0 --tau 0.2 --plant-gain 1.0`
+
 📦 Roadmap
 	•	v0:
 	•	Core traits + PID + fail-safe
@@ -91,6 +115,7 @@ cargo test
 📚 Documentation
 	•	docs/ARCHITECTURE.md – modules, data flow, extensibility
 	•	docs/API.md – HAL traits, control APIs, and usage snippets
+	•	docs/TUNING.md – PID/FailSafe/plant 調參流程與建議
 	•	CSV schema (platform/sim2d unified): `t,dt,desired_v,left,right,distance,state,meas_left,meas_right,err,adapt_gain`
 
 ⸻
