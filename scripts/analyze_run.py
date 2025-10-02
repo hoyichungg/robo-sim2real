@@ -13,7 +13,8 @@ analyze_run.py
   * adapt_gain 平均值
 ------------------------------------------------------------
 用法：
-    python scripts/analyze_run.py --csv run.csv
+    python scripts/analyze_run.py --csv run/sample_platform.csv
+    # 若省略 --csv，將依序嘗試 run.csv → run/telemetry.csv → run/sim.csv
 ------------------------------------------------------------
 """
 
@@ -22,28 +23,43 @@ import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from typing import Optional
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--csv", type=str, default="run.csv", help="輸入的 run.csv 檔案")
-    p.add_argument("--out", type=str, default="run_analysis.png", help="輸出的圖檔")
+    p.add_argument("--csv", type=str, default=None, help="輸入的 CSV 檔案")
+    p.add_argument("--out", type=str, default=None, help="輸出的圖檔（預設依 CSV 命名）")
     return p.parse_args()
+
+def resolve_csv_path(arg_path: Optional[str]) -> str:
+    if arg_path:
+        if not os.path.exists(arg_path):
+            raise FileNotFoundError(f"找不到 {arg_path}")
+        return arg_path
+    for p in ("run.csv", "run/telemetry.csv", "run/sim.csv"):
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError("找不到 CSV，請用 --csv 指定（例如 run/sample_platform.csv）")
 
 
 def main():
     args = parse_args()
-    if not os.path.exists(args.csv):
-        raise FileNotFoundError(f"找不到 {args.csv}")
+    csv_path = resolve_csv_path(args.csv)
+    out_path = args.out or f"analyze_{os.path.splitext(os.path.basename(csv_path))[0]}.png"
 
-    df = pd.read_csv(args.csv)
+    df = pd.read_csv(csv_path)
 
     t = df["t"].to_numpy(float)
     v_des = df["desired_v"].to_numpy(float)
 
-    # 優先用 bench 模式的 meas_left/meas_right
+    # 優先用 meas_left/meas_right，但若全為 NaN 則退回 left/right 平均
     if "meas_left" in df.columns and "meas_right" in df.columns:
-        v_out = 0.5 * (df["meas_left"] + df["meas_right"]).to_numpy(float)
+        meas = 0.5 * (df["meas_left"] + df["meas_right"]).to_numpy(float)
+        if np.isfinite(meas).any():
+            v_out = meas
+        else:
+            v_out = 0.5 * (df["left"] + df["right"]).to_numpy(float)
     else:
         v_out = 0.5 * (df["left"] + df["right"]).to_numpy(float)
 
@@ -65,8 +81,8 @@ def main():
     else:
         rms = mean_err = mean_gain = np.nan
 
-    print("=== Run.csv 分析結果 ===")
-    print(f"檔案: {args.csv}")
+    print("=== CSV 分析結果 ===")
+    print(f"檔案: {csv_path}")
     print(f"FailSafe 觸發時間: {'—' if np.isinf(brake_time) else round(float(brake_time), 3)} s")
     print(f"RMS 誤差: {rms:.4f} m/s")
     print(f"平均 |誤差|: {mean_err:.4f} m/s")
@@ -97,8 +113,8 @@ def main():
     ax2.legend(loc="best")
 
     plt.tight_layout()
-    plt.savefig(args.out, dpi=150)
-    print(f"\n已輸出圖檔：{args.out}")
+    plt.savefig(out_path, dpi=150)
+    print(f"\n已輸出圖檔：{out_path}")
     plt.show()
 
 

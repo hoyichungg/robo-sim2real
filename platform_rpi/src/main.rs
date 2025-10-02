@@ -57,7 +57,7 @@ struct Args {
     quiet: bool,
 
     /// Velocity profile type
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, ignore_case = true)]
     v_profile: Option<VProfile>,
 
     /// Step profile: step time (s)

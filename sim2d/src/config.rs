@@ -23,7 +23,7 @@ pub struct Cli {
     pub kd: f32,
 
     /// 速度曲線
-    #[arg(long, value_parser=["const","step","sin"], default_value="const")]
+    #[arg(long, value_parser=["const","step","sin"], default_value="const", ignore_case = true)]
     pub v_profile: String,
     #[arg(long, default_value_t = 1.0)]
     pub step_at: f32,

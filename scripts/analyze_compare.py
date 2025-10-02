@@ -9,9 +9,11 @@ analyze_compare.py
 """
 
 import os
+import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from typing import Optional
 
 # =====(可選) 中文字型缺字處理：盡力指定常見中文字型，沒有也不報錯 =====
 try:
@@ -32,11 +34,27 @@ except Exception:
     pass
 
 # --------- 設定（檔名可依需求更改）---------
-FILES = {
-    "Const": "out_const.csv",
-    "Sin":   "out_sin.csv",
-    "Step":  "out_step.csv",
+DEFAULT_FILES = {
+    "Const": ["out_const.csv", "run/out_const.csv"],
+    "Sin":   ["out_sin.csv", "run/out_sin.csv"],
+    "Step":  ["out_step.csv", "run/out_step.csv"],
 }
+
+def resolve_path(arg: Optional[str], candidates: list[str]) -> Optional[str]:
+    if arg:
+        return arg if os.path.exists(arg) else None
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
+
+def parse_args():
+    ap = argparse.ArgumentParser(description="Compare Const/Sin/Step runs before FailSafe")
+    ap.add_argument("--const", type=str, default=None, help="Const CSV 路徑（預設找 out_const.csv 或 run/out_const.csv）")
+    ap.add_argument("--sin", type=str, default=None, help="Sin CSV 路徑（預設找 out_sin.csv 或 run/out_sin.csv）")
+    ap.add_argument("--step", type=str, default=None, help="Step CSV 路徑（預設找 out_step.csv 或 run/out_step.csv）")
+    ap.add_argument("--out", type=str, default="compare.png", help="輸出的疊圖檔名")
+    return ap.parse_args()
 
 # --------- 小工具：線性內插找穿越時刻 ----------
 def first_cross_time(t, y, level, direction="up"):
@@ -171,13 +189,21 @@ def step_kpis(df):
 
 # --------- 主流程 ----------
 def main():
+    args = parse_args()
     records = []   # 收集 RMS 表
     available = {} # 繪圖用資料（各自的時間與曲線）
 
+    files = {
+        "Const": resolve_path(args.const, DEFAULT_FILES["Const"]),
+        "Sin": resolve_path(args.sin, DEFAULT_FILES["Sin"]),
+        "Step": resolve_path(args.step, DEFAULT_FILES["Step"]),
+    }
+
     # 讀三種檔案，計算 RMS（FailSafe 前）
-    for name, path in FILES.items():
-        if not os.path.exists(path):
-            print(f"⚠️ 找不到 {path}，略過 {name}")
+    for name, path in files.items():
+        if not path:
+            # 指出找過哪些候選
+            print(f"⚠️ 找不到 {name}，請用 --{name.lower()} 指定或放在 {DEFAULT_FILES[name]} 中任何一個")
             continue
 
         df = pd.read_csv(path)
@@ -201,8 +227,8 @@ def main():
         print("沒有任何 CSV 被讀到，請確認檔案是否存在於目前目錄。")
 
     # Step KPI
-    if "Step" in available and os.path.exists(FILES["Step"]):
-        df_step = pd.read_csv(FILES["Step"])
+    if "Step" in available and files.get("Step"):
+        df_step = pd.read_csv(files["Step"])
         k = step_kpis(df_step)
         print("\n=== Step 響應 KPI（FailSafe 前） ===")
         print(f"目標速度: {k['target']:.2f} m/s")
@@ -244,8 +270,8 @@ def main():
         plt.grid(True)
         plt.legend(loc="best")
         plt.tight_layout()
-        plt.savefig("compare.png", dpi=150)
-        print("\n已輸出疊圖：compare.png")
+        plt.savefig(args.out, dpi=150)
+        print(f"\n已輸出疊圖：{args.out}")
 
 if __name__ == "__main__":
     main()
