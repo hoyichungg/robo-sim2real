@@ -89,9 +89,9 @@ cargo test
 ⸻
 
 📚 Documentation
-	•	docs/arch.md: architecture overview & data flow
-	•	docs/safety.md: fail-safe rules & ISO 26262/21434 checklist
-	•	configs/sim/default.toml: example config
+	•	docs/ARCHITECTURE.md – modules, data flow, extensibility
+	•	docs/API.md – HAL traits, control APIs, and usage snippets
+	•	CSV schema (platform/sim2d unified): `t,dt,desired_v,left,right,distance,state,meas_left,meas_right,err,adapt_gain`
 
 ⸻
 

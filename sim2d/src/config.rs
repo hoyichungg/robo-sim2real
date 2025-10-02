@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use clap::Parser;
 use std::path::PathBuf;
+use r2_core::profile as core_profile;
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "sim2d", author, version, about)]
@@ -108,14 +109,12 @@ impl Cli {
 }
 
 pub fn desired_speed(cfg: &RuntimeCfg, t: f32) -> f32 {
-    match cfg.v_profile.as_str() {
-        "step" => {
-            if t >= cfg.step_at {
-                cfg.desired_v
-            } else {
-                0.0
-            }
-        }
-        _ => cfg.desired_v,
-    }
+    let prof = match cfg.v_profile.to_ascii_lowercase().as_str() {
+        "const" => Some(core_profile::VProfile::Const),
+        "step" => Some(core_profile::VProfile::Step),
+        "sin" => Some(core_profile::VProfile::Sin),
+        _ => None,
+    };
+    let params = core_profile::ProfileParams { step_at: cfg.step_at, ..Default::default() };
+    core_profile::desired_v(prof, params, cfg.desired_v, t)
 }
