@@ -41,8 +41,11 @@ pub fn control_step(
     // 量測速度
     let v_meas = q.single().0.v;
 
+    // 期望速度（支援 const/step/sin）
+    let v_des = desired_speed(&cfg, clk.t);
+
     // PID 計算
-    let mut u = st.pid.step(cfg.desired_v, v_meas, clk.dt);
+    let mut u = st.pid.step(v_des, v_meas, clk.dt);
 
     // 自適應增益
     if cfg.adaptive {
@@ -62,7 +65,6 @@ pub fn control_step(
     vel.v = u;
 
     // Telemetry 輸出（與平台 CSV 對齊）
-    let v_des = desired_speed(&cfg, clk.t);
     let left = u;
     let right = u;
     let dist = distance.0;

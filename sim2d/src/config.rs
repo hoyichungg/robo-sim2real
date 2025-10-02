@@ -27,6 +27,13 @@ pub struct Cli {
     pub v_profile: String,
     #[arg(long, default_value_t = 1.0)]
     pub step_at: f32,
+    /// Sin 曲線參數（與平台對齊）
+    #[arg(long, default_value_t = 0.3)]
+    pub sin_amp: f32,
+    #[arg(long, default_value_t = 0.2)]
+    pub sin_freq: f32,
+    #[arg(long, default_value_t = 0.4)]
+    pub sin_bias: f32,
 
     /// FailSafe
     #[arg(long, default_value_t = 0.25)]
@@ -70,6 +77,9 @@ pub struct RuntimeCfg {
     pub kd: f32,
     pub v_profile: String,
     pub step_at: f32,
+    pub sin_amp: f32,
+    pub sin_freq: f32,
+    pub sin_bias: f32,
     pub threshold: f32,
     pub hysteresis: f32,
     pub adaptive: bool,
@@ -93,6 +103,9 @@ impl Cli {
             kd: self.kd,
             v_profile: self.v_profile.clone(),
             step_at: self.step_at,
+            sin_amp: self.sin_amp,
+            sin_freq: self.sin_freq,
+            sin_bias: self.sin_bias,
             threshold: self.threshold,
             hysteresis: self.hysteresis,
             adaptive: self.adaptive,
@@ -115,6 +128,11 @@ pub fn desired_speed(cfg: &RuntimeCfg, t: f32) -> f32 {
         "sin" => Some(core_profile::VProfile::Sin),
         _ => None,
     };
-    let params = core_profile::ProfileParams { step_at: cfg.step_at, ..Default::default() };
+    let params = core_profile::ProfileParams {
+        step_at: cfg.step_at,
+        sin_amp: cfg.sin_amp,
+        sin_freq: cfg.sin_freq,
+        sin_bias: cfg.sin_bias,
+    };
     core_profile::desired_v(prof, params, cfg.desired_v, t)
 }
