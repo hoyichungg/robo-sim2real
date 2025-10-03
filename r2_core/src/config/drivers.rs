@@ -1,14 +1,9 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum MotorBackend {
+    #[default]
     Mock,
     Bench(BenchMotorConfig),
     Rpi(RpiMotorConfig),
-}
-
-impl Default for MotorBackend {
-    fn default() -> Self {
-        MotorBackend::Mock
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -49,16 +44,11 @@ impl Default for RpiMotorConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum DistanceBackend {
+    #[default]
     Mock,
     RpiHcsr04 { trig_gpio: u8, echo_gpio: u8 },
-}
-
-impl Default for DistanceBackend {
-    fn default() -> Self {
-        DistanceBackend::Mock
-    }
 }
 
 #[derive(Debug, Clone, Default)]
