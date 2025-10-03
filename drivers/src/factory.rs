@@ -8,10 +8,14 @@ use crate::rpi::{RpiDistance, RpiMotor};
 #[cfg(not(feature = "rpi"))]
 use crate::rpi::{RpiDistanceStub, RpiMotorStub};
 
+type MotorHandle = Box<dyn Motor>;
+type DistanceHandle = Box<dyn DistanceSensor>;
+type DriverPair = (MotorHandle, DistanceHandle);
+
 pub struct DriverFactory;
 
 impl DriverFactory {
-    pub fn create_motor(cfg: &MotorBackend) -> Result<Box<dyn Motor>, String> {
+    pub fn create_motor(cfg: &MotorBackend) -> Result<MotorHandle, String> {
         match cfg {
             MotorBackend::Mock => Ok(Box::new(MockMotor) as Box<dyn Motor>),
             MotorBackend::Bench(..) => {
@@ -32,7 +36,7 @@ impl DriverFactory {
         }
     }
 
-    pub fn create_distance(cfg: &DistanceBackend) -> Result<Box<dyn DistanceSensor>, String> {
+    pub fn create_distance(cfg: &DistanceBackend) -> Result<DistanceHandle, String> {
         match cfg {
             DistanceBackend::Mock => Ok(Box::new(MockSensor::default()) as Box<dyn DistanceSensor>),
             DistanceBackend::RpiHcsr04 {
@@ -53,9 +57,7 @@ impl DriverFactory {
         }
     }
 
-    pub fn create_all(
-        cfg: &DriverConfig,
-    ) -> Result<(Box<dyn Motor>, Box<dyn DistanceSensor>), String> {
+    pub fn create_all(cfg: &DriverConfig) -> Result<DriverPair, String> {
         let motor = Self::create_motor(&cfg.motor)?;
         let distance = Self::create_distance(&cfg.distance)?;
         Ok((motor, distance))
