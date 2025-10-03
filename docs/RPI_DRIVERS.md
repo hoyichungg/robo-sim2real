@@ -31,8 +31,16 @@ fn main() {
     // ... 解析 CLI 省略 ...
 
     #[cfg(feature = "rpi")]
-    let mut motor = RpiMotor::new(Channel::Pwm0, Channel::Pwm1, 1000.0, 1.0)
-        .expect("init pwm motor");
+    let rpi_cfg = RpiMotorConfig {
+        left_pwm: 0,  // Channel::Pwm0（請搭配對應的 GPIO，例如 18/12）
+        right_pwm: 1, // Channel::Pwm1（GPIO 19/13）
+        left_dir: Some((5, 6)),  // IN1/IN2 方向腳（BCM 編號）
+        right_dir: Some((13, 16)),
+        max_mps: 1.2,
+        pwm_freq_hz: 1000.0,
+    };
+    #[cfg(feature = "rpi")]
+    let mut motor = RpiMotor::new(rpi_cfg).expect("init rpi motor");
     #[cfg(not(feature = "rpi"))]
     let mut motor = drivers::rpi::RpiMotorStub; // 預設 stub
 
@@ -48,17 +56,20 @@ fn main() {
 > 提示：若你不想在 `main.rs` 寫 `cfg`，也可在 `drivers` 提供一個工廠函式依 feature 回傳對應型別。
 
 ## 接線說明（範例）
-- PWM：依你的馬達驅動板支援的 PWM 腳接到對應的 EN/IN 腳位。
-  - ex. 左馬達用 `Channel::Pwm0`（GPIO12/18 之一），右馬達用 `Channel::Pwm1`（GPIO13/19 之一）。
-  - 注意硬體 PWM 與實際 GPIO 的對應，因 Pi 型號與引腳功能不同，請參考 rppal 與官方 pinout。
+- PWM：依硬體 PWM 通道使用對應的 GPIO（例如 Channel::Pwm0 → GPIO18 或 12；Channel::Pwm1 → GPIO19 或 13）。
+  - 如果使用 TB6612/DRV8833，PWM 輸出接到 `PWMA/PWMB`。
+- 方向腳（可選，但建議接）：
+  - `left_dir = Some((IN1, IN2))`、`right_dir = Some((IN3, IN4))`。
+  - 馬達前進時設定為 `IN1=高, IN2=低`；反轉時 `IN1=低, IN2=高`；速度為 0 時兩腳皆低。
 - HC‑SR04：
   - `VCC` → 5V、`GND` → GND
   - `TRIG` → BCM GPIO23（可自行調整）
   - `ECHO` → BCM GPIO24（可自行調整；建議分壓到 3.3V）
 
 ## 參數建議
-- PWM 頻率 `freq_hz`：可從 1000 Hz 起測，依你的電機驅動器建議調整。
+- PWM 頻率 `pwm_freq_hz`：可從 1000 Hz 起測，依你的電機驅動器建議調整。
 - `max_mps`：設定你的車在滿 PWM 時的最大線速（m/s），讓 PID 輸出與實際馬達具合理對應。
+- 方向腳未設定時，驅動器會拒絕負速度指令（返回錯誤），以避免硬體無法反轉的情況。
 
 ## 限制與注意
 - 目前 `RpiMotor` 僅以 duty 代表「推力大小」，未包含方向切換。實務上請搭配 H 橋或雙 PWM 實作前進/後退。
@@ -75,4 +86,3 @@ fn main() {
 ---
 
 若你希望我幫你在 `platform_rpi` 加上 feature 封裝（例如 `features = ["rpi"]` 自動連動 drivers/rpi），或提供工廠方法來簡化初始化，請告訴我。
-

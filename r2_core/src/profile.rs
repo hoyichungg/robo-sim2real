@@ -46,7 +46,9 @@ pub fn desired_v(
                 0.0
             }
         }
-        Some(VProfile::Sin) => params.sin_bias + params.sin_amp * (std::f32::consts::TAU * params.sin_freq * t).sin(),
+        Some(VProfile::Sin) => {
+            params.sin_bias + params.sin_amp * (std::f32::consts::TAU * params.sin_freq * t).sin()
+        }
     }
 }
 
@@ -56,22 +58,32 @@ mod tests {
 
     #[test]
     fn desired_const() {
-        assert!((desired_v(Some(VProfile::Const), ProfileParams::default(), 0.6, 1.23) - 0.6).abs() < 1e-6);
+        assert!(
+            (desired_v(Some(VProfile::Const), ProfileParams::default(), 0.6, 1.23) - 0.6).abs()
+                < 1e-6
+        );
         assert!((desired_v(None, ProfileParams::default(), 0.6, 1.23) - 0.6).abs() < 1e-6);
     }
 
     #[test]
     fn desired_step_edges() {
-        let p = ProfileParams { step_at: 1.0, ..Default::default() };
+        let p = ProfileParams {
+            step_at: 1.0,
+            ..Default::default()
+        };
         assert!((desired_v(Some(VProfile::Step), p, 0.6, 0.99) - 0.0).abs() < 1e-6);
         assert!((desired_v(Some(VProfile::Step), p, 0.6, 1.00) - 0.6).abs() < 1e-6);
     }
 
     #[test]
     fn desired_sin() {
-        let p = ProfileParams { sin_amp: 0.3, sin_freq: 0.2, sin_bias: 0.4, ..Default::default() };
+        let p = ProfileParams {
+            sin_amp: 0.3,
+            sin_freq: 0.2,
+            sin_bias: 0.4,
+            ..Default::default()
+        };
         let v = desired_v(Some(VProfile::Sin), p, 0.0, 0.5);
         assert!(v.is_finite());
     }
 }
-

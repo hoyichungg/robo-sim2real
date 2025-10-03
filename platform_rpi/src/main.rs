@@ -1,9 +1,10 @@
 use crate::profile::Telemetry;
 use clap::Parser;
 use drivers::mock::{MockMotor, MockSensor};
+use r2_core::config::control::{
+    AdaptiveConfig, ControlConfig, FailSafeConfig, PidConfig, SafetyMarginConfig,
+};
 use r2_core::control::controller::{Controller, DifferentialKinematics};
-use r2_core::control::pid::Pid;
-use r2_core::control::safety::FailSafe;
 use r2_core::hal::{DistanceSensor, Motor};
 use std::fs::File;
 use std::io::Write;
@@ -116,11 +117,33 @@ fn main() {
     let mut motor = MockMotor;
     let mut sensor = MockSensor::default();
 
-    let pid = Pid::new(args.kp, args.ki, args.kd)
-        .with_output_limits(-1.0, 1.0)
-        .with_integral_limits(-0.5, 0.5);
+    let mut pid_cfg = PidConfig::default();
+    pid_cfg.kp = args.kp;
+    pid_cfg.ki = args.ki;
+    pid_cfg.kd = args.kd;
+
+    let mut fs_cfg = FailSafeConfig::default();
+    fs_cfg.threshold_m = args.threshold;
+    fs_cfg.hysteresis_m = args.hysteresis;
+
+    let mut adaptive_cfg = AdaptiveConfig::default();
+    adaptive_cfg.enabled = args.adaptive;
+    adaptive_cfg.e_small = args.e_small;
+    adaptive_cfg.e_large = args.e_large;
+    adaptive_cfg.gain_min = args.gain_min;
+    adaptive_cfg.gain_max = args.gain_max;
+
+    let control_cfg = ControlConfig {
+        pid: pid_cfg,
+        failsafe: fs_cfg,
+        adaptive: adaptive_cfg,
+        safety_margin: SafetyMarginConfig::default(),
+    };
+
+    let pid = control_cfg.build_pid();
     let kin = DifferentialKinematics { wheel_base_m: 0.22 };
-    let safety = FailSafe::new(args.threshold, args.hysteresis);
+    let safety = control_cfg.build_failsafe();
+    let adaptive_cfg = control_cfg.adaptive;
     let mut ctrl = Controller::new(pid, kin, safety);
 
     let hz = args.hz.max(1.0);
@@ -168,13 +191,13 @@ fn main() {
         let abs_e = err.abs();
 
         // 自適應輸出增益（未開啟則為 1.0）
-        let adapt = if args.adaptive {
+        let adapt = if adaptive_cfg.enabled {
             map_gain(
                 abs_e,
-                args.e_small,
-                args.e_large,
-                args.gain_min,
-                args.gain_max,
+                adaptive_cfg.e_small,
+                adaptive_cfg.e_large,
+                adaptive_cfg.gain_min,
+                adaptive_cfg.gain_max,
             )
         } else {
             1.0

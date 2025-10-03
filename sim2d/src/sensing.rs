@@ -1,8 +1,8 @@
 use crate::components::{Car, Heading, Obstacle};
 use crate::config::RuntimeCfg;
 use crate::resources::DistanceSense;
-use bevy::prelude::*;
 use bevy::prelude::Gizmos;
+use bevy::prelude::*;
 
 /// 單障礙方塊：估一個「車頭方向的前方距離（公尺）」
 /// - 使用車頭射線與障礙物 AABB 的最近交點
@@ -26,10 +26,7 @@ pub fn sense_distance(
     }
 
     // 車長（像素）：用 Sprite.custom_size.x 作為長邊（沒有則視為 0）
-    let car_len_px = car_sprite
-        .custom_size
-        .map(|s| s.x.abs())
-        .unwrap_or(0.0);
+    let car_len_px = car_sprite.custom_size.map(|s| s.x.abs()).unwrap_or(0.0);
     let ray_origin = car_tx.translation.truncate() + fwd.normalize() * (0.5 * car_len_px);
     let dir = fwd.normalize();
 
@@ -55,8 +52,16 @@ pub fn sense_distance(
 
         // Ray-AABB in 2D（處理接近 0 的分母）
         let inv = Vec2::new(
-            if dir.x.abs() < 1e-6 { f32::INFINITY } else { 1.0 / dir.x },
-            if dir.y.abs() < 1e-6 { f32::INFINITY } else { 1.0 / dir.y },
+            if dir.x.abs() < 1e-6 {
+                f32::INFINITY
+            } else {
+                1.0 / dir.x
+            },
+            if dir.y.abs() < 1e-6 {
+                f32::INFINITY
+            } else {
+                1.0 / dir.y
+            },
         );
         let t1 = (min - ray_origin) * inv;
         let t2 = (max - ray_origin) * inv;
@@ -86,7 +91,7 @@ pub fn sense_distance(
     }
 
     // 轉換成公尺並加安全緩衝：扣掉 10% 車長
-    let margin_m = cfg.safety_margin_ratio.max(0.0) * (car_len_px / cfg.px_per_m);
+    let margin_m = cfg.control.margin_ratio() * (car_len_px / cfg.px_per_m);
     let d_m = if best_px.is_finite() {
         (best_px / cfg.px_per_m).max(0.0)
     } else {
@@ -103,7 +108,7 @@ pub fn sense_distance(
         best_px
     } else {
         // 依 threshold 動態設定射線長度（像素）
-        (cfg.threshold * cfg.px_per_m + car_len_px).max(60.0)
+        (cfg.control.failsafe.threshold_m * cfg.px_per_m + car_len_px).max(60.0)
     };
     let a = ray_origin;
     let b = ray_origin + dir * line_len;

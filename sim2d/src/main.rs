@@ -82,7 +82,11 @@ fn spawn_scene(mut commands: Commands, cfg: Res<RuntimeCfg>) {
 
     // 多障礙（CLI 提供座標；若未提供則給預設三個）
     let mut list: Vec<Vec2> = if cfg.obstacles.is_empty() {
-        vec![Vec2::new(300.0, 0.0), Vec2::new(350.0, 120.0), Vec2::new(420.0, -100.0)]
+        vec![
+            Vec2::new(300.0, 0.0),
+            Vec2::new(350.0, 120.0),
+            Vec2::new(420.0, -100.0),
+        ]
     } else {
         cfg.obstacles.clone()
     };

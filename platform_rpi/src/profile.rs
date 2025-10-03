@@ -16,7 +16,12 @@ pub type ProfileParams = core_profile::ProfileParams;
 /// - `params`: 曲線參數
 /// - `desired_v_const`: 對於 Const/Step，目標值（Step 在 step_at 之後跳到這個值）
 /// - `t`: 目前時間（秒）
-pub fn desired_v(profile: Option<VProfile>, params: ProfileParams, desired_v_const: f32, t: f32) -> f32 {
+pub fn desired_v(
+    profile: Option<VProfile>,
+    params: ProfileParams,
+    desired_v_const: f32,
+    t: f32,
+) -> f32 {
     let mapped = match profile {
         None => None,
         Some(VProfile::Const) => Some(core_profile::VProfile::Const),

@@ -1,7 +1,8 @@
 use bevy::prelude::*;
+use r2_core::config::control::AdaptiveConfig;
+use r2_core::control::adaptive::map_gain;
 use r2_core::control::pid::Pid;
 use r2_core::control::safety::FailSafe;
-use r2_core::control::adaptive::map_gain;
 
 use crate::components::{Car, Heading, Velocity};
 use crate::config::{desired_speed, RuntimeCfg};
@@ -12,6 +13,7 @@ pub struct CtrlState {
     pub pid: Pid,
     pub adapt_gain: f32,
     pub safety: FailSafe,
+    pub adaptive_cfg: AdaptiveConfig,
 }
 
 /// 控制一步：讀量測 -> PID -> 自適應增益 -> 指令速度
@@ -25,12 +27,12 @@ pub fn control_step(
 ) {
     // 初始化一次
     if st_opt.is_none() {
+        let control_cfg = cfg.control;
         *st_opt = Some(CtrlState {
-            pid: Pid::new(cfg.kp, cfg.ki, cfg.kd)
-                .with_output_limits(-1.0, 1.0)
-                .with_integral_limits(-0.5, 0.5),
+            pid: control_cfg.build_pid(),
             adapt_gain: 1.0,
-            safety: FailSafe::new(cfg.threshold, cfg.hysteresis),
+            safety: control_cfg.build_failsafe(),
+            adaptive_cfg: control_cfg.adaptive,
         });
     }
     let st = st_opt.as_mut().unwrap();
@@ -48,10 +50,15 @@ pub fn control_step(
     let mut u = st.pid.step(v_des, v_meas, clk.dt);
 
     // 自適應增益
-    if cfg.adaptive {
-        // 以「當下目標」計算誤差大小，避免使用常數 desired_v 導致估計偏差
+    if st.adaptive_cfg.enabled {
         let ae = (v_des - v_meas).abs();
-        let gain = map_gain(ae, cfg.e_small, cfg.e_large, cfg.gain_min, cfg.gain_max);
+        let gain = map_gain(
+            ae,
+            st.adaptive_cfg.e_small,
+            st.adaptive_cfg.e_large,
+            st.adaptive_cfg.gain_min,
+            st.adaptive_cfg.gain_max,
+        );
         st.adapt_gain = gain;
         u *= gain;
     } else {

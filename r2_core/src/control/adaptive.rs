@@ -34,4 +34,3 @@ mod tests {
         assert!((g - 0.9).abs() < 1e-6);
     }
 }
-

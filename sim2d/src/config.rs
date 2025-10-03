@@ -1,7 +1,10 @@
 use bevy::prelude::*;
 use clap::Parser;
-use std::path::PathBuf;
+use r2_core::config::control::{
+    AdaptiveConfig, ControlConfig, FailSafeConfig, PidConfig, SafetyMarginConfig,
+};
 use r2_core::profile as core_profile;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "sim2d", author, version, about)]
@@ -59,7 +62,7 @@ pub struct Cli {
 
     /// Bevy world 單位換算（像素/公尺）
     #[arg(long, default_value_t = 100.0)]
-    pub px_per_m: f32, // 1 m = 幾個 Bevy world 單位（像素）
+    pub px_per_m: f32,
 
     /// 植物（一階）
     #[arg(long, default_value_t = 0.8)]
@@ -81,22 +84,12 @@ pub struct Cli {
 pub struct RuntimeCfg {
     pub hz: f32,
     pub desired_v: f32,
-    pub kp: f32,
-    pub ki: f32,
-    pub kd: f32,
+    pub control: ControlConfig,
     pub v_profile: String,
     pub step_at: f32,
     pub sin_amp: f32,
     pub sin_freq: f32,
     pub sin_bias: f32,
-    pub threshold: f32,
-    pub hysteresis: f32,
-    pub safety_margin_ratio: f32,
-    pub adaptive: bool,
-    pub e_small: f32,
-    pub e_large: f32,
-    pub gain_min: f32,
-    pub gain_max: f32,
     pub tau: f32,
     pub plant_gain: f32,
     pub px_per_m: f32,
@@ -108,32 +101,50 @@ impl Cli {
     pub fn to_runtime(&self) -> RuntimeCfg {
         fn parse_xy(s: &str) -> Option<Vec2> {
             let parts: Vec<_> = s.split(',').collect();
-            if parts.len() != 2 { return None; }
+            if parts.len() != 2 {
+                return None;
+            }
             let x: f32 = parts[0].trim().parse().ok()?;
             let y: f32 = parts[1].trim().parse().ok()?;
             Some(Vec2::new(x, y))
         }
         let obstacles = self.obstacles.iter().filter_map(|s| parse_xy(s)).collect();
 
+        let mut pid_cfg = PidConfig::default();
+        pid_cfg.kp = self.kp;
+        pid_cfg.ki = self.ki;
+        pid_cfg.kd = self.kd;
+
+        let mut failsafe_cfg = FailSafeConfig::default();
+        failsafe_cfg.threshold_m = self.threshold;
+        failsafe_cfg.hysteresis_m = self.hysteresis;
+
+        let mut adaptive_cfg = AdaptiveConfig::default();
+        adaptive_cfg.enabled = self.adaptive;
+        adaptive_cfg.e_small = self.e_small;
+        adaptive_cfg.e_large = self.e_large;
+        adaptive_cfg.gain_min = self.gain_min;
+        adaptive_cfg.gain_max = self.gain_max;
+
+        let mut safety_margin = SafetyMarginConfig::default();
+        safety_margin.ratio_of_car_length = self.safety_margin_ratio;
+
+        let control = ControlConfig {
+            pid: pid_cfg,
+            failsafe: failsafe_cfg,
+            adaptive: adaptive_cfg,
+            safety_margin,
+        };
+
         RuntimeCfg {
             hz: self.hz,
             desired_v: self.desired_v,
-            kp: self.kp,
-            ki: self.ki,
-            kd: self.kd,
+            control,
             v_profile: self.v_profile.clone(),
             step_at: self.step_at,
             sin_amp: self.sin_amp,
             sin_freq: self.sin_freq,
             sin_bias: self.sin_bias,
-            threshold: self.threshold,
-            hysteresis: self.hysteresis,
-            safety_margin_ratio: self.safety_margin_ratio,
-            adaptive: self.adaptive,
-            e_small: self.e_small,
-            e_large: self.e_large,
-            gain_min: self.gain_min,
-            gain_max: self.gain_max,
             tau: self.tau,
             plant_gain: self.plant_gain,
             px_per_m: self.px_per_m,

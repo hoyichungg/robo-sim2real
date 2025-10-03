@@ -34,38 +34,77 @@ mod real {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    /// Raspberry Pi 兩路 PWM 馬達（使用硬體 PWM 腳位）
-    pub struct RpiPwmMotor {
-        left: Pwm,
-        right: Pwm,
+    use r2_core::config::drivers::RpiMotorConfig;
+
+    /// Raspberry Pi 兩路 PWM 馬達（支援方向腳）
+    pub struct RpiMotor {
+        left_pwm: Pwm,
+        right_pwm: Pwm,
+        left_dir: Option<(OutputPin, OutputPin)>,
+        right_dir: Option<(OutputPin, OutputPin)>,
         max_mps: f32,
     }
 
-    impl RpiPwmMotor {
-        /// 建立兩路 PWM：
-        /// - `left_ch`/`right_ch`: PWM 通道（對應特定 GPIO，請見 rppal 文件）
-        /// - `freq_hz`: PWM 頻率（例如 1000.0）
-        /// - `max_mps`: 速度轉 duty 的比例上限（|v|>=max_mps 時 duty=100%）
-        pub fn new(left_ch: Channel, right_ch: Channel, freq_hz: f64, max_mps: f32) -> Result<Self, String> {
-            let left = Pwm::with_frequency(left_ch, freq_hz, 0.0, Polarity::Normal, true)
-                .map_err(|e| format!("left pwm: {e}"))?;
-            let right = Pwm::with_frequency(right_ch, freq_hz, 0.0, Polarity::Normal, true)
-                .map_err(|e| format!("right pwm: {e}"))?;
-            Ok(Self { left, right, max_mps: max_mps.max(1e-6) })
+    impl RpiMotor {
+        pub fn new(cfg: RpiMotorConfig) -> Result<Self, String> {
+            let left_ch = channel_from_index(cfg.left_pwm)?;
+            let right_ch = channel_from_index(cfg.right_pwm)?;
+
+            let left_pwm =
+                Pwm::with_frequency(left_ch, cfg.pwm_freq_hz, 0.0, Polarity::Normal, true)
+                    .map_err(|e| format!("left pwm: {e}"))?;
+            let right_pwm =
+                Pwm::with_frequency(right_ch, cfg.pwm_freq_hz, 0.0, Polarity::Normal, true)
+                    .map_err(|e| format!("right pwm: {e}"))?;
+
+            let left_dir = create_dir_pair(cfg.left_dir)?;
+            let right_dir = create_dir_pair(cfg.right_dir)?;
+
+            Ok(Self {
+                left_pwm,
+                right_pwm,
+                left_dir,
+                right_dir,
+                max_mps: cfg.max_mps.max(1e-6),
+            })
         }
 
         fn v_to_duty(&self, v: f32) -> f64 {
-            let r = (v / self.max_mps).clamp(-1.0, 1.0) as f64;
-            r.abs() // 單邊正轉：先忽略方向，方向可用 H 橋或相反腳實作
+            (v / self.max_mps).clamp(-1.0, 1.0).abs() as f64
         }
     }
 
-    impl Motor for RpiPwmMotor {
+    impl Motor for RpiMotor {
         fn set_wheel_speeds(&mut self, left_mps: f32, right_mps: f32) -> Result<(), String> {
-            let dl = self.v_to_duty(left_mps);
-            let dr = self.v_to_duty(right_mps);
-            self.left.set_duty_cycle(dl).map_err(|e| e.to_string())?;
-            self.right.set_duty_cycle(dr).map_err(|e| e.to_string())?;
+            let left_cmd = left_mps.clamp(-self.max_mps, self.max_mps);
+            let right_cmd = right_mps.clamp(-self.max_mps, self.max_mps);
+
+            if left_cmd < 0.0 && self.left_dir.is_none() {
+                return Err(
+                    "left motor configured without direction pins; received negative speed".into(),
+                );
+            }
+            if right_cmd < 0.0 && self.right_dir.is_none() {
+                return Err(
+                    "right motor configured without direction pins; received negative speed".into(),
+                );
+            }
+
+            if let Some((ref mut in1, ref mut in2)) = self.left_dir.as_mut() {
+                set_direction(in1, in2, left_cmd);
+            }
+            if let Some((ref mut in1, ref mut in2)) = self.right_dir.as_mut() {
+                set_direction(in1, in2, right_cmd);
+            }
+
+            let dl = self.v_to_duty(left_cmd);
+            let dr = self.v_to_duty(right_cmd);
+            self.left_pwm
+                .set_duty_cycle(dl)
+                .map_err(|e| e.to_string())?;
+            self.right_pwm
+                .set_duty_cycle(dr)
+                .map_err(|e| e.to_string())?;
             Ok(())
         }
     }
@@ -80,7 +119,10 @@ mod real {
         /// `trig_gpio` / `echo_gpio`: BCM GPIO 編號（非實體 pin 序號）
         pub fn new(trig_gpio: u8, echo_gpio: u8) -> Result<Self, String> {
             let gpio = Gpio::new().map_err(|e| e.to_string())?;
-            let mut trig = gpio.get(trig_gpio).map_err(|e| e.to_string())?.into_output();
+            let mut trig = gpio
+                .get(trig_gpio)
+                .map_err(|e| e.to_string())?
+                .into_output();
             trig.set_low();
             let echo = gpio.get(echo_gpio).map_err(|e| e.to_string())?.into_input();
             Ok(Self { trig, echo })
@@ -127,9 +169,53 @@ mod real {
 
     // 公開型別
     pub use Hcsr04 as RpiDistance;
-    pub use RpiPwmMotor as RpiMotor;
+    pub use RpiMotor;
+
+    fn channel_from_index(idx: u8) -> Result<Channel, String> {
+        match idx {
+            0 => Ok(Channel::Pwm0),
+            1 => Ok(Channel::Pwm1),
+            other => Err(format!("unsupported PWM channel index: {other}")),
+        }
+    }
+
+    fn create_dir_pair(pins: Option<(u8, u8)>) -> Result<Option<(OutputPin, OutputPin)>, String> {
+        if let Some((pin_a, pin_b)) = pins {
+            let mut in1 = gpio_output(pin_a)?;
+            let mut in2 = gpio_output(pin_b)?;
+            in1.set_low();
+            in2.set_low();
+            Ok(Some((in1, in2)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn gpio_output(pin: u8) -> Result<OutputPin, String> {
+        Gpio::new()
+            .map_err(|e| e.to_string())?
+            .get(pin)
+            .map_err(|e| e.to_string())?
+            .into_output()
+    }
+
+    fn set_direction(in1: &mut OutputPin, in2: &mut OutputPin, v: f32) {
+        const EPS: f32 = 1e-4;
+        if v > EPS {
+            in1.set_high();
+            in2.set_low();
+        } else if v < -EPS {
+            in1.set_low();
+            in2.set_high();
+        } else {
+            in1.set_low();
+            in2.set_low();
+        }
+    }
 }
 
 // 方便外部使用：feature 啟用時導出實機型別名稱，否則僅導出 stub
+#[cfg(not(feature = "rpi"))]
+pub use self::{RpiDistanceStub as RpiDistance, RpiMotorStub as RpiMotor};
 #[cfg(feature = "rpi")]
 pub use real::{RpiDistance, RpiMotor};
