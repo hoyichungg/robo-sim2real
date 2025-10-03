@@ -42,6 +42,36 @@ impl DistanceSensor for MyTof {
 }
 ```
 
+## Drivers
+
+檔案：`drivers/src/factory.rs`
+
+- `type MotorHandle = Box<dyn Motor>`
+- `type DistanceHandle = Box<dyn DistanceSensor>`
+- `struct DriverHandles { pub motor: MotorHandle, pub distance: DistanceHandle }`
+- `struct DriverFactory`
+  - `fn create_motor(cfg: &MotorBackend) -> Result<MotorHandle, String>`
+  - `fn create_distance(cfg: &DistanceBackend) -> Result<DistanceHandle, String>`
+  - `fn create_all(cfg: &DriverConfig) -> Result<DriverHandles, String>`
+
+說明：根據 `r2_core::config::drivers::DriverConfig`（包含 `MotorBackend`、`DistanceBackend`）建立對應的 HAL 實作。若未啟用 `drivers` crate 的 `rpi` feature，Raspberry Pi 後端會自動回退到 stub 型別。
+
+範例：
+```rust
+use drivers::factory::{DriverFactory, DriverHandles};
+use r2_core::config::drivers::{DriverConfig, MotorBackend, DistanceBackend};
+
+let cfg = DriverConfig {
+    motor: MotorBackend::Mock,
+    distance: DistanceBackend::Mock,
+};
+let DriverHandles { mut motor, mut distance } = DriverFactory::create_all(&cfg)?;
+motor.set_wheel_speeds(0.5, 0.5)?;
+let d = distance.distance_m()?;
+```
+
+---
+
 ## 控制
 
 ### PID
@@ -133,27 +163,38 @@ let v = desired_v(Some(VProfile::Sin), params, 0.6, 2.5);
 ```
 
 ### 自適應輸出增益
-檔案：`platform_rpi/src/adaptive.rs`
+檔案：`r2_core/src/control/adaptive.rs`
 
 - `fn map_gain(abs_e: f32, e_small: f32, e_large: f32, g_min: f32, g_max: f32) -> f32`
 
+說明：把誤差絕對值線性映射到輸出增益，兩端夾限。`platform_rpi::adaptive` 直接 re-export 此函式，`sim2d` 也使用相同邏輯。
+
 範例：
 ```rust
-use platform_rpi::adaptive::map_gain;
+use r2_core::control::adaptive::map_gain;
 let g = map_gain(0.05, 0.02, 0.20, 0.6, 1.2); // => 約 0.7~0.8 之間
 ```
 
 ## 模擬（sim2d）要點
 
-雖然 Bevy 系統屬於內部流程，但以下型別常見：
-- `components.rs`：`Car`、`Obstacle`、`Velocity { v, omega }`、`Heading(Vec2)`
-- `resources.rs`：`SimClock { t, dt }`、`DistanceSense(f32)`、`TelemetryWriter::new(path), write(...)`
-- `config.rs`：`Cli` → `RuntimeCfg`，`desired_speed(cfg, t)`（const/step）
+雖然 Bevy 系統屬於內部流程，但以下型別與函式最常被外部引用：
+- `components.rs`：`Car`、`Obstacle`、`Velocity { v, omega }`、`Heading(Vec2)`。
+- `resources.rs`：`SimClock { t, dt }`、`DistanceSense(f32)`、`TelemetryWriter::new(path)` / `write(...)`（輸出與平台共用的 CSV header）。
+- `config.rs`：
+  - `struct Cli { pub config: Option<PathBuf>, pub overrides: OverrideArgs }`
+  - `struct SimSettings`：`fn into_settings(self) -> Result<SimSettings, String>`、`fn to_runtime(&self) -> RuntimeCfg`、`fn csv_path(&self) -> &Path`
+  - `struct RuntimeCfg`（Bevy `Resource`）：控制參數、plant、障礙、CSV 路徑等。
+  - `desired_speed(cfg: &RuntimeCfg, t: f32) -> f32`：呼叫 `r2_core::profile::desired_v`，支援 const/step/sin。
 
-控制步驟（`control.rs`）：以 `Pid` 產生 `u`，可選擇自適應增益調整後，再由 `FailSafe.clamp_speed(u)` 做最終裁切，寫回 `Velocity.v`。
+Config 流程：
+1. `Cli::parse()` 讀取 `--config <file>` 與 CLI override。
+2. `Cli::into_settings()` 會載入 TOML（支援陣列/物件/字串格式的 obstacles）並套用 CLI 覆蓋，處理相對路徑。
+3. `SimSettings::to_runtime()` 轉為 `RuntimeCfg`，再注入 Bevy App。
+
+控制步驟（`control.rs`）：以 `Pid` 產生 `u`，可選擇 `map_gain` 套用自適應增益後，再由 `FailSafe.clamp_speed(u)` 做最終裁切，寫回 `Velocity.v`。
 
 ## 小貼士
-- FailSafe 對無效距離（Err/NaN/負值）視為危險 → 立即急停。
-- 若需要自動解除急停，可在 `FailSafe` 上擴充 `update(...)` 策略，或定期檢查距離後呼叫 `reset(...)`。
+- FailSafe 對無效距離（Err/NaN/負值）視為危險 → 立即急停，且距離超過 `threshold + hysteresis` 會自動解除。
+- `DriverFactory` 會根據 feature 自動選擇實機或 stub；啟用 `rpi` feature 後才會連結 `rppal`。
 - `Controller.tick(...)` 目前角速度給 0；若要擴充轉向，可改 tick 簽名或新增角速控制器。
-- `drivers/src/rpi.rs` 是 stub，串接 RPi 時請以此為入口整合 `rppal` 或其他庫。
+- `sim2d` 的 `--config` 支援相對路徑，皆以設定檔所在目錄為基準。
