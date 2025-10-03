@@ -8,9 +8,14 @@ use crate::rpi::{RpiDistance, RpiMotor};
 #[cfg(not(feature = "rpi"))]
 use crate::rpi::{RpiDistanceStub, RpiMotorStub};
 
-type MotorHandle = Box<dyn Motor>;
-type DistanceHandle = Box<dyn DistanceSensor>;
-type DriverPair = (MotorHandle, DistanceHandle);
+pub type MotorHandle = Box<dyn Motor>;
+pub type DistanceHandle = Box<dyn DistanceSensor>;
+
+/// Named collection of driver handles returned by the factory.
+pub struct DriverHandles {
+    pub motor: MotorHandle,
+    pub distance: DistanceHandle,
+}
 
 pub struct DriverFactory;
 
@@ -57,9 +62,9 @@ impl DriverFactory {
         }
     }
 
-    pub fn create_all(cfg: &DriverConfig) -> Result<DriverPair, String> {
+    pub fn create_all(cfg: &DriverConfig) -> Result<DriverHandles, String> {
         let motor = Self::create_motor(&cfg.motor)?;
         let distance = Self::create_distance(&cfg.distance)?;
-        Ok((motor, distance))
+        Ok(DriverHandles { motor, distance })
     }
 }

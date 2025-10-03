@@ -1,0 +1,44 @@
+# Example configuration for the sim2d binary.
+# Values shown here match the CLI defaults unless noted otherwise.
+
+hz = 120.0
+desired_v = 0.5
+
+# PID gains
+kp = 0.7
+ki = 0.05
+kd = 0.0
+
+# Velocity profile
+v_profile = "sin"
+step_at = 1.0
+sin_amp = 0.25
+sin_freq = 0.3
+sin_bias = 0.4
+
+# Fail-safe and safety margin
+threshold = 0.25
+hysteresis = 0.05
+safety_margin_ratio = 0.1
+
+# Adaptive controller
+adaptive = true
+e_small = 0.02
+e_large = 0.20
+gain_min = 0.6
+gain_max = 1.2
+
+# Simulation units and plant model
+px_per_m = 100.0
+tau = 0.8
+plant_gain = 0.8
+
+# CSV relative paths resolve against this file's directory
+csv = "../run/sim_config.csv"
+
+# Obstacles can be provided as arrays, maps, or strings
+obstacles = [
+  [300.0, 0.0],
+  { x = 350.0, y = 120.0 },
+  "420,-100",
+]

@@ -55,6 +55,18 @@ cargo run -p sim2d -- \
   --safety-margin-ratio 0.1 \
   --obstacle 300,0 --obstacle 350,120 --obstacle 420,-100
 
+### Use a Config File
+
+```bash
+cp configs/sim2d.example.toml run/my_sim.toml
+cargo run -p sim2d -- --config run/my_sim.toml
+
+# CLI flags still override values from the file when provided
+cargo run -p sim2d -- --config run/my_sim.toml --hz 200 --plant-gain 1.0
+```
+
+Config files are TOML. Relative paths (for example the CSV destination) resolve against the config file location, so you can keep per-run assets alongside the config snippet.
+
 ⸻
 
 Run with Raspberry Pi (stub drivers)
@@ -78,6 +90,18 @@ cargo test
 📊 Telemetry & Replay
 	•	Runtime data (distance, wheel speeds, commands, states) is recorded to CSV.
 	•	Replays can be run deterministically with the same inputs for debugging.
+
+⸻
+
+## 🧩 Driver Backends
+
+`drivers::factory::DriverFactory` centralises hardware selection. Calling `create_all()` now returns a named `DriverHandles` struct with `motor` and `distance` fields, so additional resources (IMUs, encoders, etc.) can be added without reshaping downstream call sites.
+
+- `Mock` – default for desktop simulation; uses in-memory stubs.
+- `Bench` – reuses the mock motor so callers can supply their own plant model.
+- `Rpi` – builds the Raspberry Pi hardware implementations when the `rpi` feature is enabled; otherwise gracefully falls back to the stub wrappers.
+
+This section makes it easier to audit which backend powers a given run configuration, whether it comes from the CLI, a config file, or a future orchestrator.
 
 ⸻
 

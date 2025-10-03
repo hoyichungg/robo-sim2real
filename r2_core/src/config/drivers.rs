@@ -48,7 +48,10 @@ impl Default for RpiMotorConfig {
 pub enum DistanceBackend {
     #[default]
     Mock,
-    RpiHcsr04 { trig_gpio: u8, echo_gpio: u8 },
+    RpiHcsr04 {
+        trig_gpio: u8,
+        echo_gpio: u8,
+    },
 }
 
 #[derive(Debug, Clone, Default)]

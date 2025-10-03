@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use clap::Parser;
+use std::process;
 
 mod components;
 mod config;
@@ -18,6 +19,17 @@ use sensing::sense_distance;
 
 fn main() {
     let cli = Cli::parse();
+    let settings = match cli.into_settings() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            eprintln!("sim2d: {err}");
+            process::exit(1);
+        }
+    };
+
+    let hz = settings.hz;
+    let csv_path = settings.csv_path().to_string_lossy().to_string();
+    let runtime_cfg = settings.to_runtime();
 
     App::new()
         // 視窗 / 渲染
@@ -32,14 +44,14 @@ fn main() {
             }), // 建議把 vsync 也留預設
         )
         // 設定 FixedUpdate 頻率
-        .insert_resource(Time::<Fixed>::from_hz(cli.hz as f64))
+        .insert_resource(Time::<Fixed>::from_hz(hz as f64))
         .insert_resource(SimClock {
             t: 0.0,
-            dt: 1.0 / cli.hz,
+            dt: 1.0 / hz,
         })
         .insert_resource(DistanceSense(f32::INFINITY))
-        .insert_resource(TelemetryWriter::new(cli.csv.clone()))
-        .insert_resource(cli.to_runtime())
+        .insert_resource(TelemetryWriter::new(csv_path))
+        .insert_resource(runtime_cfg)
         // 場景
         .add_systems(Startup, (spawn_camera, spawn_scene))
         // 感測 → 控制 → 物理 → 紀錄（固定步進）
