@@ -117,21 +117,23 @@ fn main() {
     let mut motor = MockMotor;
     let mut sensor = MockSensor::default();
 
-    let mut pid_cfg = PidConfig::default();
-    pid_cfg.kp = args.kp;
-    pid_cfg.ki = args.ki;
-    pid_cfg.kd = args.kd;
-
-    let mut fs_cfg = FailSafeConfig::default();
-    fs_cfg.threshold_m = args.threshold;
-    fs_cfg.hysteresis_m = args.hysteresis;
-
-    let mut adaptive_cfg = AdaptiveConfig::default();
-    adaptive_cfg.enabled = args.adaptive;
-    adaptive_cfg.e_small = args.e_small;
-    adaptive_cfg.e_large = args.e_large;
-    adaptive_cfg.gain_min = args.gain_min;
-    adaptive_cfg.gain_max = args.gain_max;
+    let pid_cfg = PidConfig {
+        kp: args.kp,
+        ki: args.ki,
+        kd: args.kd,
+        ..PidConfig::default()
+    };
+    let fs_cfg = FailSafeConfig {
+        threshold_m: args.threshold,
+        hysteresis_m: args.hysteresis,
+    };
+    let adaptive_cfg = AdaptiveConfig {
+        enabled: args.adaptive,
+        e_small: args.e_small,
+        e_large: args.e_large,
+        gain_min: args.gain_min,
+        gain_max: args.gain_max,
+    };
 
     let control_cfg = ControlConfig {
         pid: pid_cfg,
