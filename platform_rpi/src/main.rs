@@ -155,10 +155,11 @@ fn main() {
         .csv
         .clone()
         .unwrap_or_else(|| PathBuf::from("run/telemetry.csv"));
-    if let Some(parent) = csv_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).expect("failed to create CSV parent dir");
-        }
+    if let Some(parent) = csv_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(parent).expect("failed to create CSV parent dir");
     }
     let file = File::create(&csv_path).expect("cannot create telemetry csv");
     let mut writer = BufWriter::new(file);
