@@ -178,7 +178,7 @@ let g = map_gain(0.05, 0.02, 0.20, 0.6, 1.2); // => 約 0.7~0.8 之間
 ## 模擬（sim2d）要點
 
 雖然 Bevy 系統屬於內部流程，但以下型別與函式最常被外部引用：
-- `components.rs`：`Car`、`Obstacle`、`Velocity { v, omega }`、`Heading(Vec2)`。
+- `components.rs`：`Car`、`Obstacle`、`Velocity { cmd, meas, omega }`、`Heading(Vec2)`。
 - `resources.rs`：`SimClock { t, dt }`、`DistanceSense(f32)`、`TelemetryWriter::new(path)` / `write(...)`（輸出與平台共用的 CSV header）。
 - `config.rs`：
   - `struct Cli { pub config: Option<PathBuf>, pub overrides: OverrideArgs }`
@@ -189,9 +189,9 @@ let g = map_gain(0.05, 0.02, 0.20, 0.6, 1.2); // => 約 0.7~0.8 之間
 Config 流程：
 1. `Cli::parse()` 讀取 `--config <file>` 與 CLI override。
 2. `Cli::into_settings()` 會載入 TOML（支援陣列/物件/字串格式的 obstacles）並套用 CLI 覆蓋，處理相對路徑。
-3. `SimSettings::to_runtime()` 轉為 `RuntimeCfg`，再注入 Bevy App。
+3. `SimSettings::to_runtime()` 轉為 `RuntimeCfg`，再注入 Bevy App。控制相關欄位在步驟 1/2 會透過 `ControlOverrides` 套用到 `ControlConfig`，與 `platform_rpi` 共用同一組合併邏輯。
 
-控制步驟（`control.rs`）：以 `Pid` 產生 `u`，可選擇 `map_gain` 套用自適應增益後，再由 `FailSafe.clamp_speed(u)` 做最終裁切，寫回 `Velocity.v`。
+控制步驟（`control.rs`）：以 `Pid` 產生 `u`，可選擇 `map_gain` 套用自適應增益後，再由 `FailSafe.clamp_speed(u)` 做最終裁切，結果存入 `Velocity.cmd`；一階 plant 會更新 `Velocity.meas` 供下次回授。
 
 ## 小貼士
 - FailSafe 對無效距離（Err/NaN/負值）視為危險 → 立即急停，且距離超過 `threshold + hysteresis` 會自動解除。

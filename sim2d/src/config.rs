@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 use clap::{Args, Parser};
-use r2_core::config::control::{
-    AdaptiveConfig, ControlConfig, FailSafeConfig, PidConfig, SafetyMarginConfig,
-};
+use r2_core::config::control::{ControlConfig, ControlOverrides};
 use r2_core::profile as core_profile;
 use serde::Deserialize;
 use std::fs;
@@ -168,6 +166,24 @@ pub struct OverrideArgs {
     pub obstacles: Vec<String>,
 }
 
+impl OverrideArgs {
+    fn control_overrides(&self) -> ControlOverrides {
+        let mut overrides = ControlOverrides::default();
+        overrides.pid.kp = self.kp;
+        overrides.pid.ki = self.ki;
+        overrides.pid.kd = self.kd;
+        overrides.failsafe.threshold_m = self.threshold;
+        overrides.failsafe.hysteresis_m = self.hysteresis;
+        overrides.safety_margin.ratio_of_car_length = self.safety_margin_ratio;
+        overrides.adaptive.enabled = self.adaptive;
+        overrides.adaptive.e_small = self.e_small;
+        overrides.adaptive.e_large = self.e_large;
+        overrides.adaptive.gain_min = self.gain_min;
+        overrides.adaptive.gain_max = self.gain_max;
+        overrides
+    }
+}
+
 #[derive(Resource, Debug, Clone)]
 pub struct RuntimeCfg {
     pub hz: f32,
@@ -189,22 +205,12 @@ pub struct RuntimeCfg {
 pub struct SimSettings {
     pub hz: f32,
     pub desired_v: f32,
-    pub kp: f32,
-    pub ki: f32,
-    pub kd: f32,
+    pub control: ControlConfig,
     pub v_profile: String,
     pub step_at: f32,
     pub sin_amp: f32,
     pub sin_freq: f32,
     pub sin_bias: f32,
-    pub threshold: f32,
-    pub hysteresis: f32,
-    pub safety_margin_ratio: f32,
-    pub adaptive: bool,
-    pub e_small: f32,
-    pub e_large: f32,
-    pub gain_min: f32,
-    pub gain_max: f32,
     pub px_per_m: f32,
     pub tau: f32,
     pub plant_gain: f32,
@@ -217,22 +223,12 @@ impl Default for SimSettings {
         Self {
             hz: 100.0,
             desired_v: 0.6,
-            kp: 0.6,
-            ki: 0.05,
-            kd: 0.0,
+            control: ControlConfig::default(),
             v_profile: "const".to_string(),
             step_at: 1.0,
             sin_amp: 0.3,
             sin_freq: 0.2,
             sin_bias: 0.4,
-            threshold: 0.25,
-            hysteresis: 0.05,
-            safety_margin_ratio: 0.1,
-            adaptive: false,
-            e_small: 0.02,
-            e_large: 0.20,
-            gain_min: 0.6,
-            gain_max: 1.2,
             px_per_m: 100.0,
             tau: 0.8,
             plant_gain: 0.8,
@@ -244,36 +240,10 @@ impl Default for SimSettings {
 
 impl SimSettings {
     pub fn to_runtime(&self) -> RuntimeCfg {
-        let mut pid_cfg = PidConfig::default();
-        pid_cfg.kp = self.kp;
-        pid_cfg.ki = self.ki;
-        pid_cfg.kd = self.kd;
-
-        let mut failsafe_cfg = FailSafeConfig::default();
-        failsafe_cfg.threshold_m = self.threshold;
-        failsafe_cfg.hysteresis_m = self.hysteresis;
-
-        let mut adaptive_cfg = AdaptiveConfig::default();
-        adaptive_cfg.enabled = self.adaptive;
-        adaptive_cfg.e_small = self.e_small;
-        adaptive_cfg.e_large = self.e_large;
-        adaptive_cfg.gain_min = self.gain_min;
-        adaptive_cfg.gain_max = self.gain_max;
-
-        let mut safety_margin = SafetyMarginConfig::default();
-        safety_margin.ratio_of_car_length = self.safety_margin_ratio;
-
-        let control = ControlConfig {
-            pid: pid_cfg,
-            failsafe: failsafe_cfg,
-            adaptive: adaptive_cfg,
-            safety_margin,
-        };
-
         RuntimeCfg {
             hz: self.hz,
             desired_v: self.desired_v,
-            control,
+            control: self.control,
             v_profile: self.v_profile.clone(),
             step_at: self.step_at,
             sin_amp: self.sin_amp,
@@ -292,20 +262,13 @@ impl SimSettings {
     }
 
     fn apply_file(&mut self, cfg: FileOverrides, base_dir: &Path) -> Result<(), String> {
+        let control_overrides = cfg.control_overrides();
+
         if let Some(value) = cfg.hz {
             self.hz = value;
         }
         if let Some(value) = cfg.desired_v {
             self.desired_v = value;
-        }
-        if let Some(value) = cfg.kp {
-            self.kp = value;
-        }
-        if let Some(value) = cfg.ki {
-            self.ki = value;
-        }
-        if let Some(value) = cfg.kd {
-            self.kd = value;
         }
         if let Some(value) = cfg.v_profile {
             self.v_profile = value;
@@ -321,30 +284,6 @@ impl SimSettings {
         }
         if let Some(value) = cfg.sin_bias {
             self.sin_bias = value;
-        }
-        if let Some(value) = cfg.threshold {
-            self.threshold = value;
-        }
-        if let Some(value) = cfg.hysteresis {
-            self.hysteresis = value;
-        }
-        if let Some(value) = cfg.safety_margin_ratio {
-            self.safety_margin_ratio = value;
-        }
-        if let Some(value) = cfg.adaptive {
-            self.adaptive = value;
-        }
-        if let Some(value) = cfg.e_small {
-            self.e_small = value;
-        }
-        if let Some(value) = cfg.e_large {
-            self.e_large = value;
-        }
-        if let Some(value) = cfg.gain_min {
-            self.gain_min = value;
-        }
-        if let Some(value) = cfg.gain_max {
-            self.gain_max = value;
         }
         if let Some(value) = cfg.px_per_m {
             self.px_per_m = value;
@@ -371,24 +310,19 @@ impl SimSettings {
             }
             self.obstacles = obstacles;
         }
+
+        self.control.apply_overrides(&control_overrides);
         Ok(())
     }
 
     fn apply_cli(&mut self, overrides: &OverrideArgs) -> Result<(), String> {
+        let control_overrides = overrides.control_overrides();
+
         if let Some(value) = overrides.hz {
             self.hz = value;
         }
         if let Some(value) = overrides.desired_v {
             self.desired_v = value;
-        }
-        if let Some(value) = overrides.kp {
-            self.kp = value;
-        }
-        if let Some(value) = overrides.ki {
-            self.ki = value;
-        }
-        if let Some(value) = overrides.kd {
-            self.kd = value;
         }
         if let Some(value) = overrides.v_profile.clone() {
             self.v_profile = value;
@@ -404,30 +338,6 @@ impl SimSettings {
         }
         if let Some(value) = overrides.sin_bias {
             self.sin_bias = value;
-        }
-        if let Some(value) = overrides.threshold {
-            self.threshold = value;
-        }
-        if let Some(value) = overrides.hysteresis {
-            self.hysteresis = value;
-        }
-        if let Some(value) = overrides.safety_margin_ratio {
-            self.safety_margin_ratio = value;
-        }
-        if let Some(value) = overrides.adaptive {
-            self.adaptive = value;
-        }
-        if let Some(value) = overrides.e_small {
-            self.e_small = value;
-        }
-        if let Some(value) = overrides.e_large {
-            self.e_large = value;
-        }
-        if let Some(value) = overrides.gain_min {
-            self.gain_min = value;
-        }
-        if let Some(value) = overrides.gain_max {
-            self.gain_max = value;
         }
         if let Some(value) = overrides.px_per_m {
             self.px_per_m = value;
@@ -445,6 +355,8 @@ impl SimSettings {
             let obstacles = parse_obstacle_strings(&overrides.obstacles)?;
             self.obstacles = obstacles;
         }
+
+        self.control.apply_overrides(&control_overrides);
         Ok(())
     }
 }
@@ -493,6 +405,24 @@ struct FileOverrides {
     plant_gain: Option<f32>,
     csv: Option<PathBuf>,
     obstacles: Option<Vec<ObstacleSpec>>,
+}
+
+impl FileOverrides {
+    fn control_overrides(&self) -> ControlOverrides {
+        let mut overrides = ControlOverrides::default();
+        overrides.pid.kp = self.kp;
+        overrides.pid.ki = self.ki;
+        overrides.pid.kd = self.kd;
+        overrides.failsafe.threshold_m = self.threshold;
+        overrides.failsafe.hysteresis_m = self.hysteresis;
+        overrides.safety_margin.ratio_of_car_length = self.safety_margin_ratio;
+        overrides.adaptive.enabled = self.adaptive;
+        overrides.adaptive.e_small = self.e_small;
+        overrides.adaptive.e_large = self.e_large;
+        overrides.adaptive.gain_min = self.gain_min;
+        overrides.adaptive.gain_max = self.gain_max;
+        overrides
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

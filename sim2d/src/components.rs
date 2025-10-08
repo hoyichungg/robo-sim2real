@@ -8,7 +8,8 @@ pub struct Obstacle;
 
 #[derive(Component, Default, Debug, Clone, Copy)]
 pub struct Velocity {
-    pub v: f32,     // 前進速度（m/s）
+    pub cmd: f32,   // 控制器輸出的線速度命令（m/s）
+    pub meas: f32,  // 模擬後的量測速度（m/s）
     pub omega: f32, // 角速度（rad/s）先保留彈性
 }
 

@@ -1,13 +1,10 @@
-use crate::profile::Telemetry;
 use clap::Parser;
 use drivers::mock::{MockMotor, MockSensor};
-use r2_core::config::control::{
-    AdaptiveConfig, ControlConfig, FailSafeConfig, PidConfig, SafetyMarginConfig,
-};
+use r2_core::config::control::{ControlConfig, ControlOverrides};
 use r2_core::control::controller::{Controller, DifferentialKinematics};
 use r2_core::hal::{DistanceSensor, Motor};
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -103,6 +100,23 @@ struct Args {
     gain_max: f32,
 }
 
+impl Args {
+    fn control_overrides(&self) -> ControlOverrides {
+        let mut overrides = ControlOverrides::default();
+        overrides.pid.kp = Some(self.kp);
+        overrides.pid.ki = Some(self.ki);
+        overrides.pid.kd = Some(self.kd);
+        overrides.failsafe.threshold_m = Some(self.threshold);
+        overrides.failsafe.hysteresis_m = Some(self.hysteresis);
+        overrides.adaptive.enabled = Some(self.adaptive);
+        overrides.adaptive.e_small = Some(self.e_small);
+        overrides.adaptive.e_large = Some(self.e_large);
+        overrides.adaptive.gain_min = Some(self.gain_min);
+        overrides.adaptive.gain_max = Some(self.gain_max);
+        overrides
+    }
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -117,30 +131,7 @@ fn main() {
     let mut motor = MockMotor;
     let mut sensor = MockSensor::default();
 
-    let pid_cfg = PidConfig {
-        kp: args.kp,
-        ki: args.ki,
-        kd: args.kd,
-        ..PidConfig::default()
-    };
-    let fs_cfg = FailSafeConfig {
-        threshold_m: args.threshold,
-        hysteresis_m: args.hysteresis,
-    };
-    let adaptive_cfg = AdaptiveConfig {
-        enabled: args.adaptive,
-        e_small: args.e_small,
-        e_large: args.e_large,
-        gain_min: args.gain_min,
-        gain_max: args.gain_max,
-    };
-
-    let control_cfg = ControlConfig {
-        pid: pid_cfg,
-        failsafe: fs_cfg,
-        adaptive: adaptive_cfg,
-        safety_margin: SafetyMarginConfig::default(),
-    };
+    let control_cfg = ControlConfig::default().with_overrides(&args.control_overrides());
 
     let pid = control_cfg.build_pid();
     let kin = DifferentialKinematics { wheel_base_m: 0.22 };
@@ -152,13 +143,30 @@ fn main() {
     let dt = Duration::from_secs_f32(1.0 / hz);
     let t0 = Instant::now();
     let mut last = t0;
-    let mut log: Vec<Telemetry> = Vec::new();
 
     // bench 模式的內部狀態
     let mut v_meas_l = 0.0f32;
     let mut v_meas_r = 0.0f32;
     let tau = args.bench_tau.max(1e-3); // 避免 0
     let gain = args.bench_gain;
+
+    // === 準備 CSV Writer ===
+    let csv_path = args
+        .csv
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("run/telemetry.csv"));
+    if let Some(parent) = csv_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).expect("failed to create CSV parent dir");
+        }
+    }
+    let file = File::create(&csv_path).expect("cannot create telemetry csv");
+    let mut writer = BufWriter::new(file);
+    writeln!(
+        writer,
+        "t,dt,desired_v,left,right,distance,state,meas_left,meas_right,err,adapt_gain"
+    )
+    .expect("write csv header");
 
     let steps = (hz * args.seconds).round() as usize;
     for _ in 0..steps {
@@ -189,8 +197,8 @@ fn main() {
         } else {
             gain * 0.5 * (l_raw + r_raw)
         };
-        let err = desired_v - v_meas_avg;
-        let abs_e = err.abs();
+        let ctrl_err = desired_v - v_meas_avg;
+        let abs_e = ctrl_err.abs();
 
         // 自適應輸出增益（未開啟則為 1.0）
         let adapt = if adaptive_cfg.enabled {
@@ -218,71 +226,28 @@ fn main() {
             println!(
                 "t={t_sec:5.2}s dt={dt_s:.3}s d={dist_dbg:.2} v_des={desired_v:.2} \
                 -> (L={l_cmd:.2}, R={r_cmd:.2}) state={st:?} meas=({:.2},{:.2}) e={:.3} gain={:.2}",
-                v_meas_l, v_meas_r, err, adapt
+                v_meas_l, v_meas_r, ctrl_err, adapt
             );
         }
 
         // 記錄：把 err / adapt_gain 一併寫入
-        log.push(Telemetry {
-            t: t_sec,
-            dt: dt_s,
-            desired_v,
-            left: l_cmd,
-            right: r_cmd,
-            distance: dist_dbg,
-            state: format!("{:?}", st),
-            meas_left: if args.bench { v_meas_l } else { f32::NAN },
-            meas_right: if args.bench { v_meas_r } else { f32::NAN },
-            err,
-            adapt_gain: adapt,
-        });
+        let state_str = format!("{:?}", st);
+        let ml = if args.bench { v_meas_l } else { f32::NAN };
+        let mr = if args.bench { v_meas_r } else { f32::NAN };
+        if let Err(io_err) = writeln!(
+            writer,
+            "{:.3},{:.3},{:.2},{:.2},{:.2},{:.2},{},{:.3},{:.3},{:.4},{:.3}",
+            t_sec, dt_s, desired_v, l_cmd, r_cmd, dist_dbg, state_str, ml, mr, ctrl_err, adapt
+        ) {
+            eprintln!("failed to write telemetry: {io_err}");
+        }
 
         std::thread::sleep(dt);
     }
 
-    // === 輸出 CSV ===
-    // 若未指定，預設寫到 run/telemetry.csv
-    let csv_path = args
-        .csv
-        .unwrap_or_else(|| PathBuf::from("run/telemetry.csv"));
-
-    // 確保資料夾存在
-    match csv_path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => {
-            std::fs::create_dir_all(parent).expect("failed to create CSV parent dir");
-        }
-        _ => {}
+    if let Err(err) = writer.flush() {
+        eprintln!("failed to flush telemetry csv: {err}");
     }
 
-    let mut file = File::create(&csv_path).expect("cannot create telemetry csv");
-
-    // Header 含 err, adapt_gain
-    writeln!(
-        file,
-        "t,dt,desired_v,left,right,distance,state,meas_left,meas_right,err,adapt_gain"
-    )
-    .unwrap();
-
-    // 每列也寫入 err / adapt_gain（meas_* 沒開 bench 就寫 NaN）
-    for row in log {
-        let ml = if args.bench { row.meas_left } else { f32::NAN };
-        let mr = if args.bench { row.meas_right } else { f32::NAN };
-        writeln!(
-            file,
-            "{:.3},{:.3},{:.2},{:.2},{:.2},{:.2},{},{:.3},{:.3},{:.4},{:.3}",
-            row.t,
-            row.dt,
-            row.desired_v,
-            row.left,
-            row.right,
-            row.distance,
-            row.state,
-            ml,
-            mr,
-            row.err,
-            row.adapt_gain
-        )
-        .unwrap();
-    }
     eprintln!("Telemetry saved to {}", csv_path.display());
 }

@@ -43,7 +43,7 @@
 
 ### 平台（Raspberry Pi/命令列）
 檔案：`platform_rpi/src/main.rs`
-- CLI 旗標（目標速度、PID、頻率、秒數、FailSafe 門檻/回滯、CSV、速度曲線、bench、一階參數、自適應參數）。
+- CLI 旗標（目標速度、PID、頻率、秒數、FailSafe 門檻/回滯、CSV、速度曲線、bench、一階參數、自適應參數），這些控制相關旗標會被彙整成 `ControlOverrides`，套用到 `ControlConfig::default()` 後給 `Controller` 使用，確保模擬與平台共用同一組合併邏輯。
 - 迴圈每步：
   1) 計算目標速度 `profile::desired_v(...)`（Const / Step / Sin）。
   2) 讀距離 `DistanceSensor::distance_m()` → `FailSafe.update(...)`。
@@ -64,16 +64,16 @@
 - 啟動：`main.rs` 解析 `Cli`（支援 `--config <file>`），透過 `SimSettings` 合併 TOML 與 CLI override，失敗時會印出錯誤並結束。成功後插入 `SimClock`、`DistanceSense`、`TelemetryWriter`、`RuntimeCfg`，再設定 FixedUpdate 管線。
 - 固定步進順序：
   1) `sensing::sense_distance`：從車頭（距離中心半個車長）發射射線，對所有障礙 AABB 做 Ray-AABB 測試，取最接近的一個；支援 px→m 換算與安全裕度（`安全距離 = hit - car_len * ratio`），若無命中則使用 FailSafe 門檻推算偽距離，寫入 `DistanceSense`。
-  2) `control::control_step`：`Pid` →（可選）`map_gain` 自適應 → `FailSafe.clamp_speed`，回寫 `Velocity.v` 並收集 CSV 欄位。
+ 2) `control::control_step`：`Pid` →（可選）`map_gain` 自適應 → `FailSafe.clamp_speed`，更新 `Velocity.cmd` 並收集 CSV 欄位。
   3) `physics::integrate_kinematics`：用一階模型將命令濾成量測速度並積分到位置（目前只處理線速）。
   4) `logging::flush_telemetry`：保留骨架，配合 `TelemetryWriter` 實作檔案輸出。
 
 組件與資源：
-- `components.rs`：`Car`、`Obstacle`、`Velocity{v,omega}`、`Heading(Vec2)`。
+- `components.rs`：`Car`、`Obstacle`、`Velocity { cmd, meas, omega }`、`Heading(Vec2)`。
 - `resources.rs`：`SimClock{t,dt}`、`DistanceSense(f32)`、`TelemetryWriter`（預設寫出與平台共用的 CSV header）。
 - `config.rs`：
   - `Cli` 帶有 `--config` 與 `OverrideArgs`，提供所有控制/plant/自適應/障礙/CSV 參數。
-  - `SimSettings` 會載入 TOML (`FileOverrides`) 並套用 CLI（含相對路徑解析、障礙多格式 array/map/text 解析）。
+  - `SimSettings` 會載入 TOML (`FileOverrides`) 並套用 CLI（含相對路徑解析、障礙多格式 array/map/text 解析）。控制參數整合透過 `ControlOverrides` 套用到 `ControlConfig`，與 `platform_rpi` 共用相同合併流程。
   - `RuntimeCfg` 作為 Bevy `Resource`，`desired_speed(...)` 直接呼叫 `r2_core::profile::desired_v`（Const/Step/Sin）。
 
 ## 驅動（Drivers）

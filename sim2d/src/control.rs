@@ -4,7 +4,7 @@ use r2_core::control::adaptive::map_gain;
 use r2_core::control::pid::Pid;
 use r2_core::control::safety::FailSafe;
 
-use crate::components::{Car, Heading, Velocity};
+use crate::components::{Car, Velocity};
 use crate::config::{desired_speed, RuntimeCfg};
 use crate::resources::{DistanceSense, SimClock, TelemetryWriter};
 
@@ -18,7 +18,7 @@ pub struct CtrlState {
 
 /// 控制一步：讀量測 -> PID -> 自適應增益 -> 指令速度
 pub fn control_step(
-    mut q: Query<(&mut Velocity, &mut Transform, &Heading), With<Car>>,
+    mut q: Query<&mut Velocity, With<Car>>,
     mut writer: ResMut<TelemetryWriter>,
     cfg: Res<RuntimeCfg>,
     clk: Res<SimClock>,
@@ -36,12 +36,11 @@ pub fn control_step(
         });
     }
     let st = st_opt.as_mut().unwrap();
-
-    // 更新 FailSafe 狀態
-    let fs_state = st.safety.update_opt(Some(distance.0));
-
-    // 量測速度
-    let v_meas = q.single().0.v;
+    let mut vel = match q.get_single_mut() {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let v_meas = vel.meas;
 
     // 期望速度（支援 const/step/sin）
     let v_des = desired_speed(&cfg, clk.t);
@@ -66,11 +65,9 @@ pub fn control_step(
     }
 
     // FailSafe 最終裁切
+    let fs_state = st.safety.update_opt(Some(distance.0));
     u = st.safety.clamp_speed(u);
-
-    // 寫回速度
-    let (mut vel, _, _) = q.single_mut();
-    vel.v = u;
+    vel.cmd = u;
 
     // Telemetry 輸出（與平台 CSV 對齊）
     let left = u;
@@ -80,7 +77,7 @@ pub fn control_step(
     let err = v_des - v_meas;
     let meas_left = f32::NAN; // 模擬版依共識填 NaN
     let meas_right = f32::NAN;
-    writer.write(
+    if let Err(err) = writer.write(
         clk.t,
         clk.dt,
         v_des,
@@ -92,5 +89,7 @@ pub fn control_step(
         meas_right,
         err,
         st.adapt_gain,
-    );
+    ) {
+        eprintln!("telemetry write failed: {err}");
+    }
 }

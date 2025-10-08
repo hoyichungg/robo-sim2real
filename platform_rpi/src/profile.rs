@@ -31,6 +31,7 @@ pub fn desired_v(
     core_profile::desired_v(mapped, params, desired_v_const, t)
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct Telemetry {
     pub t: f32,         // 時間戳 (秒)
