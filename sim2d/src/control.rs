@@ -75,8 +75,8 @@ pub fn control_step(
     let dist = distance.0;
     let state_str = format!("{:?}", fs_state);
     let err = v_des - v_meas;
-    let meas_left = f32::NAN; // 模擬版依共識填 NaN
-    let meas_right = f32::NAN;
+    let meas_left = v_meas; // 模擬 plant 左右輪同速
+    let meas_right = v_meas;
     if let Err(err) = writer.write(
         clk.t,
         clk.dt,

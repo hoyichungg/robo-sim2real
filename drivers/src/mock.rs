@@ -4,7 +4,12 @@ use std::time::Instant;
 pub struct MockMotor;
 impl Motor for MockMotor {
     fn set_wheel_speeds(&mut self, left: f32, right: f32) -> Result<(), String> {
-        println!("[MockMotor] left={left:.2}, right={right:.2}");
+        tracing::debug!(
+            target: "drivers::mock_motor",
+            left = left,
+            right = right,
+            "MockMotor set wheel speeds"
+        );
         Ok(())
     }
 }

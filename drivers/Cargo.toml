@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 r2_core = { path = "../r2_core", package = "robot-core" }
+tracing = "0.1"
 
 [features]
 # 啟用 Raspberry Pi 實機驅動（需要在 RPi 上編譯執行）

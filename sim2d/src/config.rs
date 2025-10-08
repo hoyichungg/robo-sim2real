@@ -189,7 +189,7 @@ pub struct RuntimeCfg {
     pub hz: f32,
     pub desired_v: f32,
     pub control: ControlConfig,
-    pub v_profile: String,
+    pub v_profile: Option<core_profile::VProfile>,
     pub step_at: f32,
     pub sin_amp: f32,
     pub sin_freq: f32,
@@ -206,7 +206,7 @@ pub struct SimSettings {
     pub hz: f32,
     pub desired_v: f32,
     pub control: ControlConfig,
-    pub v_profile: String,
+    pub v_profile: Option<core_profile::VProfile>,
     pub step_at: f32,
     pub sin_amp: f32,
     pub sin_freq: f32,
@@ -224,7 +224,7 @@ impl Default for SimSettings {
             hz: 100.0,
             desired_v: 0.6,
             control: ControlConfig::default(),
-            v_profile: "const".to_string(),
+            v_profile: Some(core_profile::VProfile::Const),
             step_at: 1.0,
             sin_amp: 0.3,
             sin_freq: 0.2,
@@ -244,7 +244,7 @@ impl SimSettings {
             hz: self.hz,
             desired_v: self.desired_v,
             control: self.control,
-            v_profile: self.v_profile.clone(),
+            v_profile: self.v_profile,
             step_at: self.step_at,
             sin_amp: self.sin_amp,
             sin_freq: self.sin_freq,
@@ -271,7 +271,8 @@ impl SimSettings {
             self.desired_v = value;
         }
         if let Some(value) = cfg.v_profile {
-            self.v_profile = value;
+            let parsed = parse_v_profile(&value)?;
+            self.v_profile = Some(parsed);
         }
         if let Some(value) = cfg.step_at {
             self.step_at = value;
@@ -324,8 +325,9 @@ impl SimSettings {
         if let Some(value) = overrides.desired_v {
             self.desired_v = value;
         }
-        if let Some(value) = overrides.v_profile.clone() {
-            self.v_profile = value;
+        if let Some(value) = overrides.v_profile.as_deref() {
+            let parsed = parse_v_profile(value)?;
+            self.v_profile = Some(parsed);
         }
         if let Some(value) = overrides.step_at {
             self.step_at = value;
@@ -473,18 +475,197 @@ fn parse_obstacle_string(value: &str) -> Result<Vec2, String> {
     Ok(Vec2::new(x, y))
 }
 
+fn parse_v_profile(raw: &str) -> Result<core_profile::VProfile, String> {
+    let trimmed = raw.trim();
+    match trimmed.to_ascii_lowercase().as_str() {
+        "const" => Ok(core_profile::VProfile::Const),
+        "step" => Ok(core_profile::VProfile::Step),
+        "sin" => Ok(core_profile::VProfile::Sin),
+        _ => Err(format!("invalid velocity profile '{}'", trimmed)),
+    }
+}
+
 pub fn desired_speed(cfg: &RuntimeCfg, t: f32) -> f32 {
-    let prof = match cfg.v_profile.to_ascii_lowercase().as_str() {
-        "const" => Some(core_profile::VProfile::Const),
-        "step" => Some(core_profile::VProfile::Step),
-        "sin" => Some(core_profile::VProfile::Sin),
-        _ => None,
-    };
     let params = core_profile::ProfileParams {
         step_at: cfg.step_at,
         sin_amp: cfg.sin_amp,
         sin_freq: cfg.sin_freq,
         sin_bias: cfg.sin_bias,
     };
-    core_profile::desired_v(prof, params, cfg.desired_v, t)
+    core_profile::desired_v(cfg.v_profile, params, cfg.desired_v, t)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    const EPS: f32 = 1e-6;
+
+    fn assert_close(actual: f32, expected: f32, label: &str) {
+        assert!(
+            (actual - expected).abs() < EPS,
+            "{label} mismatch: got {actual}, expected {expected}"
+        );
+    }
+
+    fn assert_control_eq(actual: &ControlConfig, expected: &ControlConfig) {
+        assert_close(actual.pid.kp, expected.pid.kp, "pid.kp");
+        assert_close(actual.pid.ki, expected.pid.ki, "pid.ki");
+        assert_close(actual.pid.kd, expected.pid.kd, "pid.kd");
+        assert_close(
+            actual.pid.limits.out_min,
+            expected.pid.limits.out_min,
+            "pid.limits.out_min",
+        );
+        assert_close(
+            actual.pid.limits.out_max,
+            expected.pid.limits.out_max,
+            "pid.limits.out_max",
+        );
+        assert_close(
+            actual.pid.limits.i_min,
+            expected.pid.limits.i_min,
+            "pid.limits.i_min",
+        );
+        assert_close(
+            actual.pid.limits.i_max,
+            expected.pid.limits.i_max,
+            "pid.limits.i_max",
+        );
+
+        assert_close(
+            actual.failsafe.threshold_m,
+            expected.failsafe.threshold_m,
+            "failsafe.threshold_m",
+        );
+        assert_close(
+            actual.failsafe.hysteresis_m,
+            expected.failsafe.hysteresis_m,
+            "failsafe.hysteresis_m",
+        );
+
+        assert_eq!(
+            actual.adaptive.enabled, expected.adaptive.enabled,
+            "adaptive.enabled mismatch"
+        );
+        assert_close(
+            actual.adaptive.e_small,
+            expected.adaptive.e_small,
+            "adaptive.e_small",
+        );
+        assert_close(
+            actual.adaptive.e_large,
+            expected.adaptive.e_large,
+            "adaptive.e_large",
+        );
+        assert_close(
+            actual.adaptive.gain_min,
+            expected.adaptive.gain_min,
+            "adaptive.gain_min",
+        );
+        assert_close(
+            actual.adaptive.gain_max,
+            expected.adaptive.gain_max,
+            "adaptive.gain_max",
+        );
+
+        assert_close(
+            actual.safety_margin.ratio_of_car_length,
+            expected.safety_margin.ratio_of_car_length,
+            "safety_margin.ratio_of_car_length",
+        );
+    }
+
+    #[test]
+    fn file_overrides_merge_into_control_config() {
+        let mut settings = SimSettings::default();
+        let file = FileOverrides {
+            kp: Some(1.25),
+            ki: Some(0.15),
+            kd: Some(0.07),
+            threshold: Some(0.18),
+            hysteresis: Some(0.06),
+            safety_margin_ratio: Some(0.35),
+            adaptive: Some(true),
+            e_small: Some(0.01),
+            e_large: Some(0.45),
+            gain_min: Some(0.55),
+            gain_max: Some(1.65),
+            ..Default::default()
+        };
+        let expected_overrides = file.control_overrides();
+        settings
+            .apply_file(file, Path::new("."))
+            .expect("file overrides should apply");
+        let expected = ControlConfig::default().with_overrides(&expected_overrides);
+        assert_control_eq(&settings.control, &expected);
+    }
+
+    #[test]
+    fn cli_overrides_merge_into_control_config() {
+        let mut settings = SimSettings::default();
+        let overrides = OverrideArgs {
+            kp: Some(1.4),
+            ki: Some(0.22),
+            kd: Some(0.11),
+            threshold: Some(0.21),
+            hysteresis: Some(0.08),
+            safety_margin_ratio: Some(0.28),
+            adaptive: Some(true),
+            e_small: Some(0.03),
+            e_large: Some(0.52),
+            gain_min: Some(0.7),
+            gain_max: Some(1.9),
+            ..Default::default()
+        };
+        let expected_overrides = overrides.control_overrides();
+        settings
+            .apply_cli(&overrides)
+            .expect("cli overrides should apply");
+        let expected = ControlConfig::default().with_overrides(&expected_overrides);
+        assert_control_eq(&settings.control, &expected);
+    }
+
+    #[test]
+    fn cli_overrides_take_precedence_over_file() {
+        let mut settings = SimSettings::default();
+        let file = FileOverrides {
+            kp: Some(0.9),
+            ki: Some(0.12),
+            kd: Some(0.05),
+            threshold: Some(0.25),
+            hysteresis: Some(0.05),
+            safety_margin_ratio: Some(0.3),
+            adaptive: Some(false),
+            e_small: Some(0.02),
+            e_large: Some(0.4),
+            gain_min: Some(0.5),
+            gain_max: Some(1.4),
+            ..Default::default()
+        };
+        let file_overrides = file.control_overrides();
+        settings
+            .apply_file(file, Path::new("."))
+            .expect("file overrides should apply");
+
+        let overrides = OverrideArgs {
+            kp: Some(1.8),
+            kd: Some(0.2),
+            threshold: Some(0.3),
+            adaptive: Some(true),
+            gain_max: Some(2.1),
+            ..Default::default()
+        };
+        let cli_overrides = overrides.control_overrides();
+        settings
+            .apply_cli(&overrides)
+            .expect("cli overrides should apply");
+
+        let mut expected = ControlConfig::default();
+        expected.apply_overrides(&file_overrides);
+        expected.apply_overrides(&cli_overrides);
+
+        assert_control_eq(&settings.control, &expected);
+    }
 }

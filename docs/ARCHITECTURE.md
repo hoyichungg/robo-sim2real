@@ -64,7 +64,7 @@
 - 啟動：`main.rs` 解析 `Cli`（支援 `--config <file>`），透過 `SimSettings` 合併 TOML 與 CLI override，失敗時會印出錯誤並結束。成功後插入 `SimClock`、`DistanceSense`、`TelemetryWriter`、`RuntimeCfg`，再設定 FixedUpdate 管線。
 - 固定步進順序：
   1) `sensing::sense_distance`：從車頭（距離中心半個車長）發射射線，對所有障礙 AABB 做 Ray-AABB 測試，取最接近的一個；支援 px→m 換算與安全裕度（`安全距離 = hit - car_len * ratio`），若無命中則使用 FailSafe 門檻推算偽距離，寫入 `DistanceSense`。
- 2) `control::control_step`：`Pid` →（可選）`map_gain` 自適應 → `FailSafe.clamp_speed`，更新 `Velocity.cmd` 並收集 CSV 欄位。
+ 2) `control::control_step`：`Pid` →（可選）`map_gain` 自適應 → `FailSafe.clamp_speed`，更新 `Velocity.cmd` 並收集 CSV 欄位；`meas_left/meas_right` 直接回填模擬的 `Velocity.meas`，與平台 bench 模式對齊。
   3) `physics::integrate_kinematics`：用一階模型將命令濾成量測速度並積分到位置（目前只處理線速）。
   4) `logging::flush_telemetry`：保留骨架，配合 `TelemetryWriter` 實作檔案輸出。
 
@@ -74,12 +74,12 @@
 - `config.rs`：
   - `Cli` 帶有 `--config` 與 `OverrideArgs`，提供所有控制/plant/自適應/障礙/CSV 參數。
   - `SimSettings` 會載入 TOML (`FileOverrides`) 並套用 CLI（含相對路徑解析、障礙多格式 array/map/text 解析）。控制參數整合透過 `ControlOverrides` 套用到 `ControlConfig`，與 `platform_rpi` 共用相同合併流程。
-  - `RuntimeCfg` 作為 Bevy `Resource`，`desired_speed(...)` 直接呼叫 `r2_core::profile::desired_v`（Const/Step/Sin）。
+  - `RuntimeCfg` 作為 Bevy `Resource`，持有已解析的 `Option<core_profile::VProfile>`；`desired_speed(...)` 直接呼叫 `r2_core::profile::desired_v`（Const/Step/Sin），無需每次 tick 比對字串。
 
 ## 驅動（Drivers）
 - `drivers/src/factory.rs`：`DriverFactory::create_all` 依 `DriverConfig` 建立 `DriverHandles { motor, distance }`，將 HAL trait 物件包成 Box；`rpi` feature 關閉時自動回退到 stub。
 - `drivers/src/mock.rs`：
-  - `MockMotor`：印出左右馬達命令（可 `--quiet` 抑制），供桌面/CI 使用。
+  - `MockMotor`：以 `tracing::debug!` 記錄左右馬達命令，可透過 subscriber 控制輸出，避免高頻噪訊；平台執行可用 `--quiet` 抑制 stdout。
   - `MockSensor`：提供可重複的距離函數（預設逐步靠近），方便驗證 FailSafe。
 - `drivers/src/rpi.rs`：
   - Feature = `rpi` 時匯入 `rppal`，提供 `RpiMotor`（硬體 PWM + 選配方向腳）與 `RpiDistance`（HC-SR04 超音波）。

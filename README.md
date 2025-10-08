@@ -2,148 +2,157 @@
 
 [![CI](https://github.com/hoyichungg/robo-sim2real/actions/workflows/ci.yml/badge.svg)](https://github.com/hoyichungg/robo-sim2real/actions)
 
-Skeleton project for differential-drive robots with a **unified control core** that runs both in  
-**2D simulation (Bevy + Rapier2D)** and on **Raspberry Pi/Linux stubs**.  
-Focus: minimal control loop, safety stop (fail-safe), and reproducible workflows with CI.
+Unified control, simulation, and runtime scaffolding for a differential-drive robot. The workspace shares one control core across a Bevy-based 2D simulator and a Raspberry Pi runtime (with mock/bench drivers on desktop). The focus is a minimal loop with PID + fail-safe, deterministic telemetry, and tooling that stays in sync between sim and hardware.
 
 ---
 
-## ✨ Features
+## ✨ Highlights
 
-- **Unified core logic** – Write once, run in simulation or on real hardware.
-- **Differential-drive model** – Simple forward-speed PID, extendable with angular velocity.
-- **Fail-safe** – Stops robot if distance < threshold or sensor error occurs.
-- **Simulation** – Bevy + Rapier2D 2D environment with mock drivers.
-- **Platform RPi** – Raspberry Pi driver stubs (via `rppal` in future).
-- **Config-driven** – TOML configs for PID, thresholds, wheel base, wheel radius.
-- **Telemetry & Replay** – Record data to CSV for deterministic replays.
-- **CI-ready** – Lint, unit tests, and aarch64 cross-compilation.
-
----
-
-## 🏗 Project Structure
-
-/core
-/control      # PID, filters, fail-safe state machine
-/hal          # traits: Motor, DistanceSensor, Clock, Telemetry
-/model        # DifferentialKinematics, Units, Command
-/replay       # CSV recorder & player
-/drivers
-/mock         # mock motor & distance sensor
-/rpi          # Raspberry Pi driver stubs
-/sim2d          # Bevy + Rapier2D simulation world
-/platform_rpi   # RPi entrypoint crate
-/configs        # Default TOML configs
-/tests          # property-based & integration tests
+- **Shared control core** (`r2_core`) consumed by both simulator and platform binaries.
+- **Config layering** – TOML configs merge with CLI overrides; velocity profiles parse up front into `core_profile::VProfile` so the runtime never re-parses strings.
+- **Bench plant** – First-order motor model lets the platform runner emulate dynamics (`--bench`, `--bench-tau`, `--bench-gain`) and records the simulated measurements back into telemetry.
+- **Safety first** – Fail-safe clamps speed when distance drops below the configured threshold or sensors fail.
+- **Telemetry everywhere** – Simulator and platform emit the same CSV schema (`t,dt,desired_v,left,right,distance,state,meas_left,meas_right,err,adapt_gain`), enabling shared analysis scripts.
+- **Controllable logging** – Mock drivers log through `tracing::debug!`, keeping high-rate runs quiet unless you opt-in.
+- **CI-ready** – `cargo test` exercises the control core and simulator configuration paths; GitHub Actions build + test the workspace.
 
 ---
 
-## 🚀 Quick Start
+## 🗂 Workspace Layout
 
-### Run 2D Simulation (desktop)
+```
+.
+├─ r2_core/          # PID, adaptive gain, fail-safe, profiles, and config merge logic
+├─ drivers/          # Mock drivers (default) and optional Raspberry Pi implementations
+├─ platform_rpi/     # CLI runner for bench mode or real hardware
+├─ sim2d/            # Bevy simulation with CLI/config loader and telemetry writer
+├─ configs/          # Example TOML configs for simulator runs
+├─ docs/             # Architecture, API, tuning guides
+├─ scripts/          # Telemetry plotting and analysis utilities
+└─ tests/            # Cross-cutting integration tests (e.g. safety fail-safe)
+```
+
+---
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- Rust 1.74+ (latest stable recommended), installed via `rustup`.
+- For telemetry plotting: Python 3.10+ (optional) with pandas/matplotlib if you want to use the helper scripts.
+
+### Run the 2D simulator
 
 ```bash
 cargo run -p sim2d
+```
 
-➡ You should see a differential-drive robot moving forward.
-If it gets too close to an obstacle, the fail-safe triggers and stops the robot.
+The default run spawns a simple map with three obstacles and executes a constant-velocity profile. Use CLI flags to experiment:
 
-# Advanced: with safety margin and multiple obstacles
+```bash
 cargo run -p sim2d -- \
-  --hz 100 -v 0.6 \
+  --hz 120 \
   --v-profile sin --sin-amp 0.3 --sin-freq 0.2 --sin-bias 0.4 \
-  --safety-margin-ratio 0.1 \
-  --obstacle 300,0 --obstacle 350,120 --obstacle 420,-100
+  --tau 0.6 --plant-gain 0.9 \
+  --adaptive --e-small 0.02 --e-large 0.18 --gain-min 0.6 --gain-max 1.4 \
+  --obstacle 300,0 --obstacle 420,-50
+```
 
-### Use a Config File
+Velocity profiles may be `const`, `step`, or `sin`; invalid values are rejected during CLI/config parsing.
+
+### Use a config file
 
 ```bash
 cp configs/sim2d.example.toml run/my_sim.toml
 cargo run -p sim2d -- --config run/my_sim.toml
 
-# CLI flags still override values from the file when provided
+# CLI flags still override the file
 cargo run -p sim2d -- --config run/my_sim.toml --hz 200 --plant-gain 1.0
 ```
 
-Config files are TOML. Relative paths (for example the CSV destination) resolve against the config file location, so you can keep per-run assets alongside the config snippet.
+Relative paths in the TOML file resolve against the file location, so you can keep per-run assets alongside the configuration snippet.
 
-⸻
+### Platform runner (desktop bench or Raspberry Pi)
 
-Run with Raspberry Pi (stub drivers)
+```bash
+# Desktop bench mode (first-order motor model + mock distance sensor)
+cargo run -p platform_rpi -- \
+  --bench --bench-tau 0.8 --bench-gain 0.6 \
+  --hz 100 --seconds 8 \
+  --v-profile step --step-at 3.0 \
+  --adaptive --e-small 0.02 --e-large 0.20 --gain-min 0.6 --gain-max 1.2 \
+  --csv run/telemetry.csv
 
-cargo build -p platform_rpi --target aarch64-unknown-linux-gnu
+# Suppress per-tick stdout by enabling tracing instead
+RUST_LOG=drivers::mock_motor=debug cargo run -p platform_rpi -- --bench --quiet
+```
 
-➡ Produces a cross-compiled binary for Raspberry Pi (stub returns fake sensor values).
+To deploy on a Raspberry Pi, build with the hardware feature enabled (either directly on the Pi, or via your cross toolchain):
 
-⸻
+```bash
+# Native build on the Pi
+cargo build -p platform_rpi --release --features rpi
 
-Run Tests
+# Example cross (adjust target/toolchain as needed)
+cargo build -p platform_rpi --release --features rpi \
+  --target aarch64-unknown-linux-gnu
+```
 
+When the `rpi` feature is active, the driver crate switches from the mock implementations to the `rppal`-backed motor and distance sensor.
+
+---
+
+## ⚙️ Configuration Layering
+
+- `sim2d` and `platform_rpi` both expose a CLI that maps cleanly onto `ControlOverrides`.
+- TOML files (`configs/*.toml`) deserialize into `FileOverrides`. Applying a file, then the CLI, mirrors the merge order documented in `docs/API.md`.
+- Velocity profiles are parsed exactly once when building `SimSettings`/`RuntimeCfg` and exposed as `Option<core_profile::VProfile>`; errors surface immediately instead of mid-run.
+- Unit tests in `sim2d/src/config.rs` cover all merge paths (file-only, CLI-only, and CLI-over-file precedence) to keep future additions honest.
+
+---
+
+## 📊 Telemetry & Analysis
+
+- Both binaries emit identical CSV headers: `t,dt,desired_v,left,right,distance,state,meas_left,meas_right,err,adapt_gain`.
+- The simulator now writes the filtered plant velocity into `meas_left`/`meas_right`, allowing scripts to compare command vs. measured response without NaNs.
+- Helper scripts in `scripts/`:
+  - `plot_telemetry.py` – quick visualization of a single run.
+  - `analyze_run.py` / `analyze_compare.py` – numeric summaries and overlays.
+  - `run_pid_sweep.py` – launch multiple bench runs and collate the results.
+
+---
+
+## 🔊 Logging
+
+Mock drivers avoid spamming stdout by logging through `tracing::debug!`. Opt-in per-module logging with:
+
+```bash
+RUST_LOG=drivers::mock_motor=debug cargo run -p platform_rpi -- --bench --quiet
+```
+
+Bring your own subscriber (e.g. `tracing-subscriber`) in binaries or integration tests if you need structured output.
+
+---
+
+## 🧪 Testing
+
+```bash
 cargo test
+cargo test -p sim2d
+```
 
-	•	PID unit tests
-	•	Fail-safe logic tests
-	•	Property-based tests for stability
+The workspace exercises PID math, adaptive gain interpolation, safety fail-safe behaviour, and the new configuration merge paths. Running simulator tests also ensures Bevy schedules compile with current features.
 
-⸻
+---
 
-📊 Telemetry & Replay
-	•	Runtime data (distance, wheel speeds, commands, states) is recorded to CSV.
-	•	Replays can be run deterministically with the same inputs for debugging.
+## 📚 Documentation
 
-⸻
+- `docs/ARCHITECTURE.md` – module overview and data flow.
+- `docs/API.md` – public structs, CLI/config reference, telemetry schema.
+- `docs/TUNING.md` – PID, fail-safe, and plant tuning walkthroughs.
 
-## 🧩 Driver Backends
+---
 
-`drivers::factory::DriverFactory` centralises hardware selection. Calling `create_all()` now returns a named `DriverHandles` struct with `motor` and `distance` fields, so additional resources (IMUs, encoders, etc.) can be added without reshaping downstream call sites.
+## ⚖️ License
 
-- `Mock` – default for desktop simulation; uses in-memory stubs.
-- `Bench` – reuses the mock motor so callers can supply their own plant model.
-- `Rpi` – builds the Raspberry Pi hardware implementations when the `rpi` feature is enabled; otherwise gracefully falls back to the stub wrappers.
-
-This section makes it easier to audit which backend powers a given run configuration, whether it comes from the CLI, a config file, or a future orchestrator.
-
-⸻
-
-## 🔧 PID Tuning (sim2d)
-
-- Defaults (sim2d CLI): `--kp 0.6 --ki 0.05 --kd 0.0`（保守穩定，建議由此起步）
-- Working example at 100 Hz（較快 plant）
-  - `--kp 0.8 --ki 0.2 --kd 0.0 --tau 0.2 --plant-gain 1.0`
-- Suggested ranges by control loop rate（依模型與目標調整）
-  - 50 Hz：`kp 0.6–0.8`、`ki 0.03–0.10`、`kd 0.0–0.005`
-  - 100 Hz：`kp 0.6–1.0`、`ki 0.05–0.20`、`kd 0.0–0.010`
-  - 200 Hz：`kp 0.4–0.8`、`ki 0.02–0.10`、`kd 0.0–0.020`
-- Heuristics
-  - 初期先把 `kd=0`；若需要加速抑制超調，再很小幅度加 D。
-  - 若輸出在 ±1 之間來回跳（抖動/打頂）：減小 `kp` 或將 `kd` 調回 0。
-  - 上升太慢：增加 `kp` 或 `ki`；超調太大：降低 `kp` 或微量加入 `kd`。
-  - 植物一階模型：`tau` 越小反應越快，`plant-gain` 建議 1.0 起步。
-- Example（100 Hz）
-  - `cargo run -p sim2d -- --hz 100 -v 0.6 --kp 0.8 --ki 0.2 --kd 0.0 --tau 0.2 --plant-gain 1.0`
-
-📦 Roadmap
-	•	v0:
-	•	Core traits + PID + fail-safe
-	•	Bevy + Rapier2D simulation
-	•	Raspberry Pi stub + aarch64 cross-compile
-	•	CI workflow (clippy, test, build artifacts)
-	•	v1:
-	•	Angular velocity + kinematics
-	•	Headless simulation for CI
-	•	Configurable multi-robot sim
-	•	Prometheus metrics
-
-⸻
-
-📚 Documentation
-	•	docs/ARCHITECTURE.md – modules, data flow, extensibility
-	•	docs/API.md – HAL traits, control APIs, and usage snippets
-	•	docs/TUNING.md – PID/FailSafe/plant 調參流程與建議
-	•	CSV schema (platform/sim2d unified): `t,dt,desired_v,left,right,distance,state,meas_left,meas_right,err,adapt_gain`
-
-⸻
-
-⚖️ License
-
-MIT or Apache-2.0 (choose one).
+Released under the [MIT License](./LICENSE).

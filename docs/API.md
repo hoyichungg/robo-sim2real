@@ -183,15 +183,15 @@ let g = map_gain(0.05, 0.02, 0.20, 0.6, 1.2); // => 約 0.7~0.8 之間
 - `config.rs`：
   - `struct Cli { pub config: Option<PathBuf>, pub overrides: OverrideArgs }`
   - `struct SimSettings`：`fn into_settings(self) -> Result<SimSettings, String>`、`fn to_runtime(&self) -> RuntimeCfg`、`fn csv_path(&self) -> &Path`
-  - `struct RuntimeCfg`（Bevy `Resource`）：控制參數、plant、障礙、CSV 路徑等。
-  - `desired_speed(cfg: &RuntimeCfg, t: f32) -> f32`：呼叫 `r2_core::profile::desired_v`，支援 const/step/sin。
+  - `struct RuntimeCfg`（Bevy `Resource`）：控制參數、plant、障礙、CSV 路徑等；`v_profile` 會在載入設定時就被解析成 `Option<core_profile::VProfile>`，避免 runtime 再做字串匹配。
+  - `desired_speed(cfg: &RuntimeCfg, t: f32) -> f32`：呼叫 `r2_core::profile::desired_v`，支援 const/step/sin，並直接使用預先解析好的 `cfg.v_profile`。
 
 Config 流程：
 1. `Cli::parse()` 讀取 `--config <file>` 與 CLI override。
-2. `Cli::into_settings()` 會載入 TOML（支援陣列/物件/字串格式的 obstacles）並套用 CLI 覆蓋，處理相對路徑。
+2. `Cli::into_settings()` 會載入 TOML（支援陣列/物件/字串格式的 obstacles）並套用 CLI 覆蓋，處理相對路徑；若 `v_profile` 不是 `const|step|sin`，會在這一步回傳錯誤。
 3. `SimSettings::to_runtime()` 轉為 `RuntimeCfg`，再注入 Bevy App。控制相關欄位在步驟 1/2 會透過 `ControlOverrides` 套用到 `ControlConfig`，與 `platform_rpi` 共用同一組合併邏輯。
 
-控制步驟（`control.rs`）：以 `Pid` 產生 `u`，可選擇 `map_gain` 套用自適應增益後，再由 `FailSafe.clamp_speed(u)` 做最終裁切，結果存入 `Velocity.cmd`；一階 plant 會更新 `Velocity.meas` 供下次回授。
+控制步驟（`control.rs`）：以 `Pid` 產生 `u`，可選擇 `map_gain` 套用自適應增益後，再由 `FailSafe.clamp_speed(u)` 做最終裁切，結果存入 `Velocity.cmd`；一階 plant 會更新 `Velocity.meas` 供下次回授，同時把該量測值回寫到 CSV 的 `meas_left/meas_right` 欄位，便於與平台日誌對比。
 
 ## 小貼士
 - FailSafe 對無效距離（Err/NaN/負值）視為危險 → 立即急停，且距離超過 `threshold + hysteresis` 會自動解除。
