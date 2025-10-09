@@ -31,6 +31,9 @@ jobs:
       - name: Run tests (RPi crates only)
         run: cargo test -p robot-core -p drivers -p platform_rpi --verbose
 
+      - name: Run tests (sim2d headless)
+        run: cargo test -p sim2d --no-default-features --verbose
+
   cross-aarch64:
     runs-on: ubuntu-latest
     steps:
