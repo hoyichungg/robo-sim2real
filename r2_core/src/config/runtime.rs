@@ -83,21 +83,11 @@ pub struct RuntimeOverrides {
     pub plant: PlantOverrides,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RuntimeConfig {
     pub loop_cfg: LoopConfig,
     pub profile: ProfileConfig,
     pub plant: PlantConfig,
-}
-
-impl Default for RuntimeConfig {
-    fn default() -> Self {
-        Self {
-            loop_cfg: LoopConfig::default(),
-            profile: ProfileConfig::default(),
-            plant: PlantConfig::default(),
-        }
-    }
 }
 
 impl RuntimeConfig {
