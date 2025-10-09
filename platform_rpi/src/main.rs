@@ -121,10 +121,12 @@ impl Args {
     fn runtime_overrides(&self) -> RuntimeOverrides {
         use r2_core::config::runtime::{LoopOverrides, PlantOverrides, ProfileOverrides};
 
-        let mut overrides = RuntimeOverrides::default();
-        overrides.loop_cfg = LoopOverrides {
-            hz: Some(self.hz),
-            desired_v: Some(self.desired_v),
+        let mut overrides = RuntimeOverrides {
+            loop_cfg: LoopOverrides {
+                hz: Some(self.hz),
+                desired_v: Some(self.desired_v),
+            },
+            ..RuntimeOverrides::default()
         };
 
         let mut profile = ProfileOverrides::default();
