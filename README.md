@@ -9,7 +9,7 @@ Unified control, simulation, and runtime scaffolding for a differential-drive ro
 ## ✨ Highlights
 
 - **Shared control core** (`r2_core`) consumed by both simulator and platform binaries.
-- **Config layering** – TOML configs merge with CLI overrides; velocity profiles parse up front into `core_profile::VProfile` so the runtime never re-parses strings.
+- **Config layering** – TOML + CLI overrides funnel through shared builders (`RuntimeConfig`, `ControlOverrides`); velocity profiles map to `ProfileExecutor` once at startup.
 - **Bench plant** – First-order motor model lets the platform runner emulate dynamics (`--bench`, `--bench-tau`, `--bench-gain`) and records the simulated measurements back into telemetry.
 - **Safety first** – Fail-safe clamps speed when distance drops below the configured threshold or sensors fail.
 - **Telemetry everywhere** – Simulator and platform emit the same CSV schema (`t,dt,desired_v,left,right,distance,state,meas_left,meas_right,err,adapt_gain`), enabling shared analysis scripts.
@@ -106,7 +106,7 @@ When the `rpi` feature is active, the driver crate switches from the mock implem
 
 - `sim2d` and `platform_rpi` both expose a CLI that maps cleanly onto `ControlOverrides`.
 - TOML files (`configs/*.toml`) deserialize into `FileOverrides`. Applying a file, then the CLI, mirrors the merge order documented in `docs/API.md`.
-- Velocity profiles are parsed exactly once when building `SimSettings`/`RuntimeCfg` and exposed as `Option<core_profile::VProfile>`; errors surface immediately instead of mid-run.
+- `RuntimeConfig` consolidates loop/profile/plant settings; `ProfileConfig::sample` and `AdaptiveConfig::build_scheduler` eliminate per-tick string matches and `if enabled` branches.
 - Unit tests in `sim2d/src/config.rs` cover all merge paths (file-only, CLI-only, and CLI-over-file precedence) to keep future additions honest.
 
 ---
@@ -115,7 +115,7 @@ When the `rpi` feature is active, the driver crate switches from the mock implem
 
 - Both binaries emit identical CSV headers: `t,dt,desired_v,left,right,distance,state,meas_left,meas_right,err,adapt_gain`.
 - The simulator now writes the filtered plant velocity into `meas_left`/`meas_right`, allowing scripts to compare command vs. measured response without NaNs.
-- Helper scripts in `scripts/`:
+- Helper scripts reuse `scripts/common/telemetry.py` for CSV parsing:
   - `plot_telemetry.py` – quick visualization of a single run.
   - `analyze_run.py` / `analyze_compare.py` – numeric summaries and overlays.
   - `run_pid_sweep.py` – launch multiple bench runs and collate the results.

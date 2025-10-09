@@ -8,9 +8,18 @@ ab_compare.py
 """
 
 import os
+import sys
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from common.telemetry import load_dataframe, telemetry_vectors  # noqa: E402
 
 BASE_DIR = "run/base"
 ADPT_DIR = "run/adapt"
@@ -55,18 +64,8 @@ def load_summary(path, label):
 
 def prefer_meas_or_avg(df):
     """回傳 (t, v_des, v_out, state)；優先用 meas_left/right，否則用 (left+right)/2"""
-    t = df["t"].to_numpy(float)
-    v_des = df["desired_v"].to_numpy(float)
-    state = df["state"].astype(str).to_numpy() if "state" in df.columns else np.array(["Run"] * len(df))
-
-    lc = {c.lower(): c for c in df.columns}
-    if "meas_left" in lc and "meas_right" in lc:
-        v_out = (df[lc["meas_left"]].to_numpy(float) + df[lc["meas_right"]].to_numpy(float)) / 2.0
-    elif "vel_left" in lc and "vel_right" in lc:
-        v_out = (df[lc["vel_left"]].to_numpy(float) + df[lc["vel_right"]].to_numpy(float)) / 2.0
-    else:
-        v_out = ((df["left"] + df["right"]) / 2.0).to_numpy(float)
-    return t, v_des, v_out, state
+    vectors = telemetry_vectors(df)
+    return vectors.time, vectors.desired, vectors.measured, vectors.state
 
 def rms_until_brake(t, v_des, v_out, state):
     nonrun = np.where(state != "Run")[0]
@@ -94,8 +93,8 @@ def plot_best_curve(df_base, df_adpt):
     b_path = b["CSV_abs"]
     a_path = a["CSV_abs"]
     try:
-        dfb = pd.read_csv(b_path)
-        dfa = pd.read_csv(a_path)
+        dfb = load_dataframe(b_path)
+        dfa = load_dataframe(a_path)
     except FileNotFoundError:
         print("❌ ab_compare: 找不到 CSV 文件。請檢查以下路徑是否存在：")
         print("   BASE:", b_path)

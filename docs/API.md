@@ -152,49 +152,55 @@ let ((l, r), state) = ctrl.tick(0.6, 0.02, Ok(0.8));
 
 - `enum VProfile { Const, Step, Sin }`
 - `struct ProfileParams { step_at, sin_amp, sin_freq, sin_bias }`
-- `fn desired_v(profile: Option<VProfile>, params: ProfileParams, desired_v_const: f32, t: f32) -> f32`
-- `struct Telemetry { t, dt, desired_v, left, right, distance, state, meas_left, meas_right, err, adapt_gain }`
+- `trait VelocityProfile` 與 `ProfileExecutor`：可對 `Option<VProfile>` 呼叫 `.sample(params, desired_v, t)`，讓新增 profile 不需改 `match`。
+- `r2_core::control::telemetry::{TelemetrySample, TelemetrySink}`：核心遙測結構與抽象輸出介面；`platform_rpi` 內建 CSV sink。
 
 範例：
 ```rust
-use platform_rpi::profile::{VProfile, ProfileParams, desired_v};
+use platform_rpi::profile::{VProfile, ProfileParams};
+use r2_core::profile::ProfileExecutor;
+
+let exec = ProfileExecutor::new(Some(VProfile::Sin));
 let params = ProfileParams { step_at: 1.0, sin_amp: 0.3, sin_freq: 0.2, sin_bias: 0.4 };
-let v = desired_v(Some(VProfile::Sin), params, 0.6, 2.5);
+let v = exec.sample(params, 0.6, 2.5);
 ```
 
 ### 自適應輸出增益
 檔案：`r2_core/src/control/adaptive.rs`
 
-- `fn map_gain(abs_e: f32, e_small: f32, e_large: f32, g_min: f32, g_max: f32) -> f32`
-
-說明：把誤差絕對值線性映射到輸出增益，兩端夾限。`platform_rpi::adaptive` 直接 re-export 此函式，`sim2d` 也使用相同邏輯。
+- `fn map_gain(...)` 保留底層線性插值。
+- `struct AdaptiveParams`、`struct AdaptiveGainScheduler`、`struct FixedGainScheduler` 與 `trait GainScheduler`：統一以排程器物件產生增益，並保留 `scheduler_from_params(...) -> Box<dyn GainScheduler>` 幫手。
+- `AdaptiveConfig::build_scheduler()`：根據設定自動回傳固定增益（未啟用）或線性插值增益（啟用）。
 
 範例：
 ```rust
-use r2_core::control::adaptive::map_gain;
-let g = map_gain(0.05, 0.02, 0.20, 0.6, 1.2); // => 約 0.7~0.8 之間
+use r2_core::control::adaptive::{AdaptiveParams, GainScheduler, scheduler_from_params};
+
+let params = AdaptiveParams { e_small: 0.02, e_large: 0.2, gain_min: 0.6, gain_max: 1.2 };
+let mut sched = scheduler_from_params(Some(params));
+let gain = sched.update(0.05); // 根據誤差回傳增益
 ```
 
 ## 模擬（sim2d）要點
 
 雖然 Bevy 系統屬於內部流程，但以下型別與函式最常被外部引用：
 - `components.rs`：`Car`、`Obstacle`、`Velocity { cmd, meas, omega }`、`Heading(Vec2)`。
-- `resources.rs`：`SimClock { t, dt }`、`DistanceSense(f32)`、`TelemetryWriter::new(path)` / `write(...)`（輸出與平台共用的 CSV header）。
+- `resources.rs`：`SimClock { t, dt }`、`DistanceSense(f32)`、`TelemetryWriter::record(sample)`（實作 `TelemetrySink`，輸出與平台共用的 CSV header）。
 - `config.rs`：
   - `struct Cli { pub config: Option<PathBuf>, pub overrides: OverrideArgs }`
-  - `struct SimSettings`：`fn into_settings(self) -> Result<SimSettings, String>`、`fn to_runtime(&self) -> RuntimeCfg`、`fn csv_path(&self) -> &Path`
-  - `struct RuntimeCfg`（Bevy `Resource`）：控制參數、plant、障礙、CSV 路徑等；`v_profile` 會在載入設定時就被解析成 `Option<core_profile::VProfile>`，避免 runtime 再做字串匹配。
-  - `desired_speed(cfg: &RuntimeCfg, t: f32) -> f32`：呼叫 `r2_core::profile::desired_v`，支援 const/step/sin，並直接使用預先解析好的 `cfg.v_profile`。
+  - `struct SimSettings`：以 `RuntimeConfig` 持有循環/曲線/plant 子結構，`fn into_settings` 會依序套用 TOML 與 CLI overrides，`fn to_runtime` 產生 `RuntimeCfg`（Bevy `Resource`）。
+  - `struct RuntimeCfg`：封裝 `control: ControlConfig`、`runtime: RuntimeConfig`、`px_per_m`、`csv`、`obstacles`。`RuntimeConfig` 內再細分 `LoopConfig { hz, desired_v }`、`ProfileConfig { profile, params }`、`PlantConfig { tau, gain }`。
+  - `desired_speed(cfg: &RuntimeCfg, t: f32) -> f32`：委派給 `cfg.runtime.profile.sample(...)`，避免每次迴圈重新匹配字串。
 
 Config 流程：
 1. `Cli::parse()` 讀取 `--config <file>` 與 CLI override。
 2. `Cli::into_settings()` 會載入 TOML（支援陣列/物件/字串格式的 obstacles）並套用 CLI 覆蓋，處理相對路徑；若 `v_profile` 不是 `const|step|sin`，會在這一步回傳錯誤。
 3. `SimSettings::to_runtime()` 轉為 `RuntimeCfg`，再注入 Bevy App。控制相關欄位在步驟 1/2 會透過 `ControlOverrides` 套用到 `ControlConfig`，與 `platform_rpi` 共用同一組合併邏輯。
 
-控制步驟（`control.rs`）：以 `Pid` 產生 `u`，可選擇 `map_gain` 套用自適應增益後，再由 `FailSafe.clamp_speed(u)` 做最終裁切，結果存入 `Velocity.cmd`；一階 plant 會更新 `Velocity.meas` 供下次回授，同時把該量測值回寫到 CSV 的 `meas_left/meas_right` 欄位，便於與平台日誌對比。
+控制步驟（`control.rs`）：以 `Pid` 產生 `u`，透過 `GainScheduler` 取得增益後再由 `FailSafe.clamp_speed(u)` 做最終裁切，結果存入 `Velocity.cmd`；一階 plant 會更新 `Velocity.meas` 供下次回授，同時把該量測值回寫到 CSV 的 `meas_left/meas_right` 欄位，便於與平台日誌對比。
 
 ## 小貼士
 - FailSafe 對無效距離（Err/NaN/負值）視為危險 → 立即急停，且距離超過 `threshold + hysteresis` 會自動解除。
-- `DriverFactory` 會根據 feature 自動選擇實機或 stub；啟用 `rpi` feature 後才會連結 `rppal`。
+- `DriverFactory` 內建可擴充的 `DeviceBuilder` 註冊機制；預設提供 motor/distance，也能將額外裝置寫入 `DriverSet::extras`。
 - `Controller.tick(...)` 目前角速度給 0；若要擴充轉向，可改 tick 簽名或新增角速控制器。
 - `sim2d` 的 `--config` 支援相對路徑，皆以設定檔所在目錄為基準。

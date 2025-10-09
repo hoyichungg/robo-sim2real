@@ -1,3 +1,4 @@
+use crate::control::adaptive::{self, AdaptiveParams, DynGainScheduler};
 use crate::control::pid::Pid;
 use crate::control::safety::FailSafe;
 
@@ -140,6 +141,20 @@ impl AdaptiveConfig {
         }
         if let Some(gain_max) = overrides.gain_max {
             self.gain_max = gain_max;
+        }
+    }
+
+    pub fn build_scheduler(&self) -> DynGainScheduler {
+        if self.enabled {
+            let params = AdaptiveParams {
+                e_small: self.e_small,
+                e_large: self.e_large,
+                gain_min: self.gain_min,
+                gain_max: self.gain_max,
+            };
+            adaptive::scheduler_from_params(Some(params))
+        } else {
+            adaptive::scheduler_from_params(None)
         }
     }
 }

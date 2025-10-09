@@ -8,12 +8,23 @@ analyze_compare.py
 - 以時間自適應範圍畫出三種測試（輸出 vs. 目標）的疊圖
 """
 
-import os
 import argparse
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
+import sys
+from pathlib import Path
 from typing import Optional
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from common.telemetry import (  # noqa: E402
+    TelemetryVectors,
+    load_dataframe,
+    resolve_csv_path,
+    telemetry_vectors,
+)
 
 # =====(可選) 中文字型缺字處理：盡力指定常見中文字型，沒有也不報錯 =====
 try:
@@ -36,17 +47,16 @@ except Exception:
 # --------- 設定（檔名可依需求更改）---------
 DEFAULT_FILES = {
     "Const": ["out_const.csv", "run/out_const.csv"],
-    "Sin":   ["out_sin.csv", "run/out_sin.csv"],
-    "Step":  ["out_step.csv", "run/out_step.csv"],
+    "Sin": ["out_sin.csv", "run/out_sin.csv"],
+    "Step": ["out_step.csv", "run/out_step.csv"],
 }
 
-def resolve_path(arg: Optional[str], candidates: list[str]) -> Optional[str]:
-    if arg:
-        return arg if os.path.exists(arg) else None
-    for p in candidates:
-        if os.path.exists(p):
-            return p
-    return None
+
+def resolve_path(arg: Optional[str], candidates: list[str]) -> Optional[Path]:
+    try:
+        return resolve_csv_path(arg, candidates)
+    except FileNotFoundError:
+        return None
 
 def parse_args():
     ap = argparse.ArgumentParser(description="Compare Const/Sin/Step runs before FailSafe")
@@ -78,25 +88,17 @@ def first_cross_time(t, y, level, direction="up"):
     return np.nan
 
 # --------- 計算：FailSafe 前的 RMS 誤差 ----------
-def rms_error_before_brake(df):
+def rms_error_before_brake(vectors: TelemetryVectors):
     """
     只取 state == "Run" 的區段；若有觸發（第一個 != Run），則僅計算到觸發「之前」。
     回傳 (rms, t_valid, v_des_valid, v_out_valid, brake_time or np.inf)
     """
-    # 讀欄位
-    t = df["t"].to_numpy(float)
-    v_des = df["desired_v"].to_numpy(float)
-    # 這邊用左右輪平均代表實際輸出速度
-    v_out = ((df["left"] + df["right"]) / 2.0).to_numpy(float)
-    # 若沒有 state 欄位，視為全程 Run
-    state = df["state"].astype(str).to_numpy() if "state" in df.columns else np.array(["Run"] * len(df))
+    t = vectors.time
+    v_des = vectors.desired
+    v_out = vectors.measured
 
-    # 第一個非 Run 的時間當作安全觸發時間
-    first_nonrun = np.where(state != "Run")[0]
-    brake_time = t[int(first_nonrun[0])] if len(first_nonrun) else np.inf
-
-    # 僅保留觸發前與 state==Run 的樣本
-    mask = (state == "Run") & (t < brake_time)
+    brake_time = vectors.failsafe_time()
+    mask = vectors.run_mask()
     t_valid = t[mask]
     v_des_valid = v_des[mask]
     v_out_valid = v_out[mask]
@@ -109,16 +111,16 @@ def rms_error_before_brake(df):
     return rms, t_valid, v_des_valid, v_out_valid, brake_time
 
 # --------- Step KPI（僅至 FailSafe 前） ----------
-def step_kpis(df):
+def step_kpis(vectors: TelemetryVectors):
     """
     自動偵測步階開始時間（desired_v 首次明顯變化），然後只在 FailSafe 觸發前評估：
     - 上升時間(10→90%), 超調%, 穩定時間(±2%), 穩態誤差
     回傳 dict；若資料不足或未達 90% 則回傳 NaN 並附原因。
     """
-    t = df["t"].to_numpy(float)
-    v_des = df["desired_v"].to_numpy(float)
-    v_out = ((df["left"] + df["right"]) / 2.0).to_numpy(float)
-    state = df["state"].astype(str).to_numpy() if "state" in df.columns else np.array(["Run"] * len(df))
+    t = vectors.time
+    v_des = vectors.desired
+    v_out = vectors.measured
+    state = vectors.state
 
     # 目標值取 desired_v 的最大值（適用一般「由 0 踩到某值」的 step）
     v_target = float(np.max(v_des))
@@ -136,8 +138,7 @@ def step_kpis(df):
         step_t0 = first_cross_time(t, v_des, 0.1 * v_target, "up")
 
     # FailSafe 觸發時間
-    non_run = np.where(state != "Run")[0]
-    brake_time = t[int(non_run[0])] if len(non_run) else np.inf
+    brake_time = vectors.failsafe_time()
 
     # 只取步階開始之後、FailSafe 之前
     mask = (t >= step_t0) & (t < brake_time)
@@ -206,9 +207,16 @@ def main():
             print(f"⚠️ 找不到 {name}，請用 --{name.lower()} 指定或放在 {DEFAULT_FILES[name]} 中任何一個")
             continue
 
-        df = pd.read_csv(path)
-        rms, t_valid, v_des_valid, v_out_valid, brake_time = rms_error_before_brake(df)
-        available[name] = dict(t=t_valid, v_des=v_des_valid, v_out=v_out_valid)
+        df = load_dataframe(path)
+        vectors = telemetry_vectors(df)
+        rms, t_valid, v_des_valid, v_out_valid, brake_time = rms_error_before_brake(vectors)
+        available[name] = dict(
+            t=t_valid,
+            v_des=v_des_valid,
+            v_out=v_out_valid,
+            brake_time=brake_time,
+            vectors=vectors,
+        )
 
         records.append({
             "測試": name,
@@ -228,8 +236,7 @@ def main():
 
     # Step KPI
     if "Step" in available and files.get("Step"):
-        df_step = pd.read_csv(files["Step"])
-        k = step_kpis(df_step)
+        k = step_kpis(available["Step"]["vectors"])
         print("\n=== Step 響應 KPI（FailSafe 前） ===")
         print(f"目標速度: {k['target']:.2f} m/s")
         print(f"步階開始時間: {k['t0']:.3f} s")

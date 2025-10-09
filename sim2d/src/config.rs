@@ -1,6 +1,10 @@
 use bevy::prelude::*;
 use clap::{Args, Parser};
 use r2_core::config::control::{ControlConfig, ControlOverrides};
+use r2_core::config::runtime::{
+    LoopOverrides, PlantOverrides, ProfileOverrides, RuntimeBuilder, RuntimeConfig,
+    RuntimeOverrides,
+};
 use r2_core::profile as core_profile;
 use serde::Deserialize;
 use std::fs;
@@ -186,16 +190,8 @@ impl OverrideArgs {
 
 #[derive(Resource, Debug, Clone)]
 pub struct RuntimeCfg {
-    pub hz: f32,
-    pub desired_v: f32,
     pub control: ControlConfig,
-    pub v_profile: Option<core_profile::VProfile>,
-    pub step_at: f32,
-    pub sin_amp: f32,
-    pub sin_freq: f32,
-    pub sin_bias: f32,
-    pub tau: f32,
-    pub plant_gain: f32,
+    pub runtime: RuntimeConfig,
     pub px_per_m: f32,
     pub csv: String,
     pub obstacles: Vec<Vec2>,
@@ -203,17 +199,9 @@ pub struct RuntimeCfg {
 
 #[derive(Debug, Clone)]
 pub struct SimSettings {
-    pub hz: f32,
-    pub desired_v: f32,
     pub control: ControlConfig,
-    pub v_profile: Option<core_profile::VProfile>,
-    pub step_at: f32,
-    pub sin_amp: f32,
-    pub sin_freq: f32,
-    pub sin_bias: f32,
+    pub runtime: RuntimeConfig,
     pub px_per_m: f32,
-    pub tau: f32,
-    pub plant_gain: f32,
     pub csv: PathBuf,
     pub obstacles: Vec<Vec2>,
 }
@@ -221,17 +209,9 @@ pub struct SimSettings {
 impl Default for SimSettings {
     fn default() -> Self {
         Self {
-            hz: 100.0,
-            desired_v: 0.6,
             control: ControlConfig::default(),
-            v_profile: Some(core_profile::VProfile::Const),
-            step_at: 1.0,
-            sin_amp: 0.3,
-            sin_freq: 0.2,
-            sin_bias: 0.4,
+            runtime: RuntimeConfig::default(),
             px_per_m: 100.0,
-            tau: 0.8,
-            plant_gain: 0.8,
             csv: PathBuf::from("run/sim.csv"),
             obstacles: Vec::new(),
         }
@@ -241,16 +221,8 @@ impl Default for SimSettings {
 impl SimSettings {
     pub fn to_runtime(&self) -> RuntimeCfg {
         RuntimeCfg {
-            hz: self.hz,
-            desired_v: self.desired_v,
             control: self.control,
-            v_profile: self.v_profile,
-            step_at: self.step_at,
-            sin_amp: self.sin_amp,
-            sin_freq: self.sin_freq,
-            sin_bias: self.sin_bias,
-            tau: self.tau,
-            plant_gain: self.plant_gain,
+            runtime: self.runtime.clone(),
             px_per_m: self.px_per_m,
             csv: self.csv.to_string_lossy().to_string(),
             obstacles: self.obstacles.clone(),
@@ -261,39 +233,44 @@ impl SimSettings {
         &self.csv
     }
 
+    pub fn loop_hz(&self) -> f32 {
+        self.runtime.loop_cfg.hz
+    }
+
     fn apply_file(&mut self, cfg: FileOverrides, base_dir: &Path) -> Result<(), String> {
         let control_overrides = cfg.control_overrides();
+        let mut runtime_overrides = RuntimeOverrides::default();
 
         if let Some(value) = cfg.hz {
-            self.hz = value;
+            runtime_overrides.loop_cfg.hz = Some(value);
         }
         if let Some(value) = cfg.desired_v {
-            self.desired_v = value;
+            runtime_overrides.loop_cfg.desired_v = Some(value);
         }
         if let Some(value) = cfg.v_profile {
             let parsed = parse_v_profile(&value)?;
-            self.v_profile = Some(parsed);
+            runtime_overrides.profile.profile = Some(Some(parsed));
         }
         if let Some(value) = cfg.step_at {
-            self.step_at = value;
+            runtime_overrides.profile.step_at = Some(value);
         }
         if let Some(value) = cfg.sin_amp {
-            self.sin_amp = value;
+            runtime_overrides.profile.sin_amp = Some(value);
         }
         if let Some(value) = cfg.sin_freq {
-            self.sin_freq = value;
+            runtime_overrides.profile.sin_freq = Some(value);
         }
         if let Some(value) = cfg.sin_bias {
-            self.sin_bias = value;
+            runtime_overrides.profile.sin_bias = Some(value);
         }
         if let Some(value) = cfg.px_per_m {
             self.px_per_m = value;
         }
         if let Some(value) = cfg.tau {
-            self.tau = value;
+            runtime_overrides.plant.tau = Some(value);
         }
         if let Some(value) = cfg.plant_gain {
-            self.plant_gain = value;
+            runtime_overrides.plant.gain = Some(value);
         }
         if let Some(value) = cfg.csv {
             let resolved = if value.is_relative() {
@@ -313,42 +290,44 @@ impl SimSettings {
         }
 
         self.control.apply_overrides(&control_overrides);
+        self.runtime.apply_overrides(&runtime_overrides);
         Ok(())
     }
 
     fn apply_cli(&mut self, overrides: &OverrideArgs) -> Result<(), String> {
         let control_overrides = overrides.control_overrides();
+        let mut runtime_overrides = RuntimeOverrides::default();
 
         if let Some(value) = overrides.hz {
-            self.hz = value;
+            runtime_overrides.loop_cfg.hz = Some(value);
         }
         if let Some(value) = overrides.desired_v {
-            self.desired_v = value;
+            runtime_overrides.loop_cfg.desired_v = Some(value);
         }
         if let Some(value) = overrides.v_profile.as_deref() {
             let parsed = parse_v_profile(value)?;
-            self.v_profile = Some(parsed);
+            runtime_overrides.profile.profile = Some(Some(parsed));
         }
         if let Some(value) = overrides.step_at {
-            self.step_at = value;
+            runtime_overrides.profile.step_at = Some(value);
         }
         if let Some(value) = overrides.sin_amp {
-            self.sin_amp = value;
+            runtime_overrides.profile.sin_amp = Some(value);
         }
         if let Some(value) = overrides.sin_freq {
-            self.sin_freq = value;
+            runtime_overrides.profile.sin_freq = Some(value);
         }
         if let Some(value) = overrides.sin_bias {
-            self.sin_bias = value;
+            runtime_overrides.profile.sin_bias = Some(value);
         }
         if let Some(value) = overrides.px_per_m {
             self.px_per_m = value;
         }
         if let Some(value) = overrides.tau {
-            self.tau = value;
+            runtime_overrides.plant.tau = Some(value);
         }
         if let Some(value) = overrides.plant_gain {
-            self.plant_gain = value;
+            runtime_overrides.plant.gain = Some(value);
         }
         if let Some(value) = overrides.csv.clone() {
             self.csv = value;
@@ -359,6 +338,7 @@ impl SimSettings {
         }
 
         self.control.apply_overrides(&control_overrides);
+        self.runtime.apply_overrides(&runtime_overrides);
         Ok(())
     }
 }
@@ -486,13 +466,9 @@ fn parse_v_profile(raw: &str) -> Result<core_profile::VProfile, String> {
 }
 
 pub fn desired_speed(cfg: &RuntimeCfg, t: f32) -> f32 {
-    let params = core_profile::ProfileParams {
-        step_at: cfg.step_at,
-        sin_amp: cfg.sin_amp,
-        sin_freq: cfg.sin_freq,
-        sin_bias: cfg.sin_bias,
-    };
-    core_profile::desired_v(cfg.v_profile, params, cfg.desired_v, t)
+    cfg.runtime
+        .profile
+        .sample(cfg.runtime.loop_cfg.desired_v, t)
 }
 
 #[cfg(test)]

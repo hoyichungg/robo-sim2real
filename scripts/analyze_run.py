@@ -18,12 +18,17 @@ analyze_run.py
 ------------------------------------------------------------
 """
 
-import os
 import argparse
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
-from typing import Optional
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from common.telemetry import load_telemetry, telemetry_vectors  # noqa: E402
 
 
 def parse_args():
@@ -32,47 +37,20 @@ def parse_args():
     p.add_argument("--out", type=str, default=None, help="輸出的圖檔（預設依 CSV 命名）")
     return p.parse_args()
 
-def resolve_csv_path(arg_path: Optional[str]) -> str:
-    if arg_path:
-        if not os.path.exists(arg_path):
-            raise FileNotFoundError(f"找不到 {arg_path}")
-        return arg_path
-    for p in ("run.csv", "run/telemetry.csv", "run/sim.csv"):
-        if os.path.exists(p):
-            return p
-    raise FileNotFoundError("找不到 CSV，請用 --csv 指定（例如 run/sample_platform.csv）")
-
 
 def main():
     args = parse_args()
-    csv_path = resolve_csv_path(args.csv)
-    out_path = args.out or f"analyze_{os.path.splitext(os.path.basename(csv_path))[0]}.png"
-
-    df = pd.read_csv(csv_path)
-
-    t = df["t"].to_numpy(float)
-    v_des = df["desired_v"].to_numpy(float)
-
-    # 優先用 meas_left/meas_right，但若全為 NaN 則退回 left/right 平均
-    if "meas_left" in df.columns and "meas_right" in df.columns:
-        meas = 0.5 * (df["meas_left"] + df["meas_right"]).to_numpy(float)
-        if np.isfinite(meas).any():
-            v_out = meas
-        else:
-            v_out = 0.5 * (df["left"] + df["right"]).to_numpy(float)
-    else:
-        v_out = 0.5 * (df["left"] + df["right"]).to_numpy(float)
-
-    state = df["state"].astype(str).to_numpy()
+    df, csv_path = load_telemetry(args.csv)
+    out_path = args.out or f"analyze_{csv_path.stem}.png"
+    traces = telemetry_vectors(df)
 
     # 找 FailSafe 觸發時間
-    nonrun = np.where(state != "Run")[0]
-    brake_time = t[nonrun[0]] if len(nonrun) else np.inf
-    mask = (state == "Run") & (t < brake_time)
+    brake_time = traces.failsafe_time()
+    mask = traces.run_mask()
 
     # 計算 RMS 誤差
-    err = df["err"].to_numpy(float) if "err" in df.columns else (v_des - v_out)
-    adapt = df["adapt_gain"].to_numpy(float) if "adapt_gain" in df.columns else np.ones_like(err)
+    err = traces.error
+    adapt = traces.adapt
 
     if mask.any():
         rms = float(np.sqrt(np.mean(err[mask] ** 2)))
@@ -92,8 +70,8 @@ def main():
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True)
 
     # 上圖：速度曲線
-    ax1.plot(t, v_out, label="Output/Measured")
-    ax1.plot(t, v_des, "--", label="Desired")
+    ax1.plot(traces.time, traces.measured, label="Output/Measured")
+    ax1.plot(traces.time, traces.desired, "--", label="Desired")
     if np.isfinite(brake_time):
         ax1.axvline(brake_time, linestyle="--", alpha=0.3, color="red", label="FailSafe")
     ax1.set_ylabel("Velocity (m/s)")
@@ -102,8 +80,8 @@ def main():
     ax1.legend(loc="best")
 
     # 下圖：誤差 vs adapt_gain
-    ax2.plot(t, err, label="Error (desired - measured)")
-    ax2.plot(t, adapt, label="Adaptive gain")
+    ax2.plot(traces.time, err, label="Error (desired - measured)")
+    ax2.plot(traces.time, adapt, label="Adaptive gain")
     if np.isfinite(brake_time):
         ax2.axvline(brake_time, linestyle="--", alpha=0.3, color="red")
     ax2.set_xlabel("Time (s)")

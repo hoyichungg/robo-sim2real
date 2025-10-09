@@ -37,10 +37,18 @@ import argparse
 import subprocess
 import itertools as it
 from datetime import datetime
+from pathlib import Path
+import sys
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from common.telemetry import load_dataframe, telemetry_vectors  # noqa: E402
 
 
 # ========= 執行前綴（你的 binary） =========
@@ -157,38 +165,33 @@ def run_one(pid, hz, seconds, out_dir, extra_flags):
 
 def read_csv(csv_path):
     """讀取一個 CSV，回傳包含 err / adapt_gain"""
-    df = pd.read_csv(csv_path)
+    df = load_dataframe(csv_path)
+    vectors = telemetry_vectors(df)
 
-    t = df["t"].to_numpy(float)
-    v_des = df["desired_v"].to_numpy(float)
-    state = df["state"].astype(str).to_numpy()
+    cols = {c.lower(): c for c in df.columns}
 
-    lc = [c.lower() for c in df.columns]
-
-    def pair(a, b):
-        if a in lc and b in lc:
-            return df.columns[lc.index(a)], df.columns[lc.index(b)]
+    def pair(a: str, b: str):
+        if a in cols and b in cols:
+            return cols[a], cols[b]
         return None
 
-    # 量測速度
-    vpair = pair("meas_left", "meas_right") or pair("vel_left", "vel_right")
-    if vpair:
-        v_out = (df[vpair[0]].to_numpy(float) + df[vpair[1]].to_numpy(float)) / 2.0
-        has_meas = True
-    else:
-        v_out = None
-        has_meas = False
-
-    # 控制輸出
     upair = pair("left", "right") or pair("u_left", "u_right")
-    u = (df[upair[0]].to_numpy(float) + df[upair[1]].to_numpy(float)) / 2.0 if upair else None
+    u = None
+    if upair:
+        u = 0.5 * (df[upair[0]].to_numpy(float) + df[upair[1]].to_numpy(float))
 
-    # 誤差與自適應增益
-    err = df["err"].to_numpy(float) if "err" in df.columns else None
-    adapt_gain = df["adapt_gain"].to_numpy(float) if "adapt_gain" in df.columns else None
+    adapt_gain = df[cols["adapt_gain"]].to_numpy(float) if "adapt_gain" in cols else None
 
-    return dict(t=t, v_des=v_des, v_out=v_out, u=u, state=state,
-                has_meas=has_meas, err=err, adapt_gain=adapt_gain)
+    return dict(
+        t=vectors.time,
+        v_des=vectors.desired,
+        v_out=vectors.measured if vectors.has_measured else None,
+        u=u,
+        state=vectors.state,
+        has_meas=vectors.has_measured,
+        err=vectors.error if vectors.has_measured else None,
+        adapt_gain=adapt_gain,
+    )
 
 
 def rms_before_failsafe(t, v_des, v_out, state):

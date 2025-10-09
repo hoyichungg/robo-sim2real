@@ -17,6 +17,14 @@ use physics::integrate_kinematics;
 use resources::{DistanceSense, SimClock, TelemetryWriter};
 use sensing::sense_distance;
 
+#[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub enum SimStep {
+    Sense,
+    Control,
+    Physics,
+    Logging,
+}
+
 fn main() {
     let cli = Cli::parse();
     let settings = match cli.into_settings() {
@@ -27,7 +35,7 @@ fn main() {
         }
     };
 
-    let hz = settings.hz;
+    let hz = settings.loop_hz();
     let csv_path = settings.csv_path().to_string_lossy().to_string();
     let runtime_cfg = settings.to_runtime();
 
@@ -55,15 +63,24 @@ fn main() {
         // 場景
         .add_systems(Startup, (spawn_camera, spawn_scene))
         // 感測 → 控制 → 物理 → 紀錄（固定步進）
+        .configure_sets(
+            FixedUpdate,
+            (
+                SimStep::Sense,
+                SimStep::Control,
+                SimStep::Physics,
+                SimStep::Logging,
+            )
+                .chain(),
+        )
         .add_systems(
             FixedUpdate,
             (
-                sense_distance,
-                control_step,
-                integrate_kinematics,
-                logging::flush_telemetry,
-            )
-                .chain(),
+                sense_distance.in_set(SimStep::Sense),
+                control_step.in_set(SimStep::Control),
+                integrate_kinematics.in_set(SimStep::Physics),
+                logging::flush_telemetry.in_set(SimStep::Logging),
+            ),
         )
         // 時鐘遞增
         .add_systems(FixedUpdate, tick_clock)

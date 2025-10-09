@@ -33,11 +33,11 @@
 - `r2_core/src/control/safety.rs`：`FailSafe` 狀態機（Run / EmergencyBrake / SafeStop），`update(...)` 依距離/錯誤更新狀態，`clamp_speed(v)` 做最終零速裁切；距離超過 `threshold + hysteresis` 時會自動回到 Run，如需人工解除仍可呼叫 `reset(...)`。
 - `r2_core/src/control/controller.rs`：`Controller::tick(desired_v, dt, distance)` 組合 PID + FailSafe + 差速運動學（先只用線速，角速保留）。內部用簡單低通模擬量測慣性。
 
-注意：`r2_core/src/control/telemetry.rs` 內有一個資料結構 `struct Telemetry`，它與 HAL 的 `trait Telemetry` 僅同名不同模組，語意不同（前者為 CSV 欄位暫存，後者為抽象輸出管道）。
+注意：`r2_core/src/control/telemetry.rs` 內定義的 `TelemetrySample` 與 HAL 的 `trait Telemetry` 是不同概念；前者描述一次樣本的欄位，後者提供輸出介面。
 
 ### 自適應輸出增益（Adaptive Gain）
-- `r2_core/src/control/adaptive.rs`：`map_gain(|e|, e_small..e_large, gain_min..gain_max)` 把誤差絕對值線性映射到輸出增益（區間外夾限），同時共享單元測試。
-- `platform_rpi/src/adaptive.rs` 與 `sim2d/src/control.rs` 皆直接使用這個 helper，確保模擬與實機一致。
+- `r2_core/src/control/adaptive.rs`：提供 `GainScheduler` trait、`AdaptiveGainScheduler`、`FixedGainScheduler`，以及 `scheduler_from_params(...)` 幫手，可根據設定建構 Box 化排程器；底層仍透過 `map_gain(...)` 做線性插值。
+- `config::control::AdaptiveConfig::build_scheduler()`：從設定直接建立調度器；模擬與平台都改為呼叫排程器而非自己判斷 `enabled`。
 
 ## 平台與資料流
 
@@ -45,39 +45,39 @@
 檔案：`platform_rpi/src/main.rs`
 - CLI 旗標（目標速度、PID、頻率、秒數、FailSafe 門檻/回滯、CSV、速度曲線、bench、一階參數、自適應參數），這些控制相關旗標會被彙整成 `ControlOverrides`，套用到 `ControlConfig::default()` 後給 `Controller` 使用，確保模擬與平台共用同一組合併邏輯。
 - 迴圈每步：
-  1) 計算目標速度 `profile::desired_v(...)`（Const / Step / Sin）。
+  1) 以 `runtime.profile.sample(...)` 計算目標速度（Const / Step / Sin）。
   2) 讀距離 `DistanceSensor::distance_m()` → `FailSafe.update(...)`。
   3) `Controller.tick(...)` 得到未自適應的 `(left,right)` 與 `SafetyState`。
   4) 若 `--bench`：用一階模型（`tau`, `gain`）把命令轉成「量測速度」估測誤差。
-  5) 若 `--adaptive`：以 `map_gain(...)` 依 |err| 調整輸出增益並夾限到 [-1,1]。
+  5) 若 `--adaptive`：透過 `GainScheduler::update(err)` 調整輸出增益並夾限到 [-1,1]。
   6) 呼叫 `Motor::set_wheel_speeds(...)`（預設使用 `drivers::mock::MockMotor`）。
   7) 累積遙測列，最後輸出 CSV（`run/telemetry.csv` 或自訂路徑）。
 
 - CSV header 與 `sim2d` 完全對齊：`t,dt,desired_v,left,right,distance,state,meas_left,meas_right,err,adapt_gain`，方便共用分析腳本。
 
-速度曲線與遙測：
-- `platform_rpi/src/profile.rs`：CLI 專用的 `VProfile` enum 會映射到 `r2_core::profile::VProfile`，計算統一的 `desired_v(...)`。
-- `profile::Telemetry` 結構包含 CSV 欄位（含 bench mode 量測值與自適應增益），供檔案輸出使用。
+- 速度曲線與遙測：
+- `platform_rpi/src/profile.rs`：CLI 專用的 `VProfile` enum 會映射到 `r2_core::profile::VProfile`；`ProfileExecutor::sample(...)` 封裝 Const/Step/Sin 計算。
+- `r2_core::control::telemetry::TelemetrySample` 描述 CSV 欄位（含 bench mode 量測值與自適應增益），可透過 `TelemetrySink` 寫往任意輸出（平台與模擬皆使用 CSV 版）。
 
 ### 2D 模擬（Bevy）
 檔案：`sim2d/src/*.rs`
 - 啟動：`main.rs` 解析 `Cli`（支援 `--config <file>`），透過 `SimSettings` 合併 TOML 與 CLI override，失敗時會印出錯誤並結束。成功後插入 `SimClock`、`DistanceSense`、`TelemetryWriter`、`RuntimeCfg`，再設定 FixedUpdate 管線。
-- 固定步進順序：
-  1) `sensing::sense_distance`：從車頭（距離中心半個車長）發射射線，對所有障礙 AABB 做 Ray-AABB 測試，取最接近的一個；支援 px→m 換算與安全裕度（`安全距離 = hit - car_len * ratio`），若無命中則使用 FailSafe 門檻推算偽距離，寫入 `DistanceSense`。
- 2) `control::control_step`：`Pid` →（可選）`map_gain` 自適應 → `FailSafe.clamp_speed`，更新 `Velocity.cmd` 並收集 CSV 欄位；`meas_left/meas_right` 直接回填模擬的 `Velocity.meas`，與平台 bench 模式對齊。
-  3) `physics::integrate_kinematics`：用一階模型將命令濾成量測速度並積分到位置（目前只處理線速）。
-  4) `logging::flush_telemetry`：保留骨架，配合 `TelemetryWriter` 實作檔案輸出。
+- 固定步進順序（`SimStep` SystemSet）：
+  1) `sensing::sense_distance`（SimStep::Sense）：Ray-AABB 測距，考慮安全裕度。
+  2) `control::control_step`（SimStep::Control）：`Pid` → `GainScheduler` → `FailSafe.clamp_speed`，更新 `Velocity.cmd` 並寫入遙測。
+  3) `physics::integrate_kinematics`（SimStep::Physics）：一階模型濾命令並積分到世界座標。
+  4) `logging::flush_telemetry`（SimStep::Logging）：定期 flush CSV writer。
 
 組件與資源：
 - `components.rs`：`Car`、`Obstacle`、`Velocity { cmd, meas, omega }`、`Heading(Vec2)`。
 - `resources.rs`：`SimClock{t,dt}`、`DistanceSense(f32)`、`TelemetryWriter`（預設寫出與平台共用的 CSV header）。
 - `config.rs`：
   - `Cli` 帶有 `--config` 與 `OverrideArgs`，提供所有控制/plant/自適應/障礙/CSV 參數。
-  - `SimSettings` 會載入 TOML (`FileOverrides`) 並套用 CLI（含相對路徑解析、障礙多格式 array/map/text 解析）。控制參數整合透過 `ControlOverrides` 套用到 `ControlConfig`，與 `platform_rpi` 共用相同合併流程。
-  - `RuntimeCfg` 作為 Bevy `Resource`，持有已解析的 `Option<core_profile::VProfile>`；`desired_speed(...)` 直接呼叫 `r2_core::profile::desired_v`（Const/Step/Sin），無需每次 tick 比對字串。
+  - `SimSettings` 會載入 TOML (`FileOverrides`) 並套用 CLI；`RuntimeConfig` 預先整合 `LoopConfig`、`ProfileConfig`、`PlantConfig`，並提供 `apply_overrides(...)` 共用邏輯。
+  - `RuntimeCfg` 作為 Bevy `Resource`，內含 `runtime: RuntimeConfig`；`desired_speed(...)` 以 `runtime.profile.sample(...)` 取得目標速度。
 
 ## 驅動（Drivers）
-- `drivers/src/factory.rs`：`DriverFactory::create_all` 依 `DriverConfig` 建立 `DriverHandles { motor, distance }`，將 HAL trait 物件包成 Box；`rpi` feature 關閉時自動回退到 stub。
+- `drivers/src/factory.rs`：`DriverFactory` 內建 `DeviceBuilder` 註冊表並回傳 `DriverSet`；預設對 motor/distance 設定 builder，使用者也可呼叫 `register(...)` 新增裝置，並透過 `DriverSet::extras` 存放附加 handle（例如 bench 參數）。
 - `drivers/src/mock.rs`：
   - `MockMotor`：以 `tracing::debug!` 記錄左右馬達命令，可透過 subscriber 控制輸出，避免高頻噪訊；平台執行可用 `--quiet` 抑制 stdout。
   - `MockSensor`：提供可重複的距離函數（預設逐步靠近），方便驗證 FailSafe。
@@ -94,7 +94,7 @@
 ## 腳本與分析
 - `scripts/plot_run.py`：讀單一 `run.csv` 繪製輸出 vs 期望與距離，輸出 `run.png`。
 - `scripts/run_pid_sweep.py`：以 `cargo run -p platform_rpi -- ...` 掃描 Kp/Ki/Kd，計算 RMS 誤差/平均自適應增益，輸出總表與疊圖。
-- 其它：`analyze_run.py`、`analyze_compare.py`、`ab_compare.py`、`plot_telemetry.py` 提供不同型態的比較與繪圖。
+- 共用工具：`scripts/common/telemetry.py` 封裝 CSV 讀取與行為提取，`analyze_run.py`、`analyze_compare.py`、`ab_compare.py`、`run_pid_sweep.py` 皆共用。
 
 ## 執行範例
 - 平台（mock + bench + 自適應 + CSV）

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use r2_core::control::telemetry::{TelemetrySample, TelemetrySink};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -25,30 +26,33 @@ impl TelemetryWriter {
         .expect("write sim csv header");
         Self { file: writer }
     }
-    pub fn write(
-        &mut self,
-        t: f32,
-        dt: f32,
-        v_des: f32,
-        left: f32,
-        right: f32,
-        dist: f32,
-        state: &str,
-        meas_left: f32,
-        meas_right: f32,
-        err: f32,
-        gain: f32,
-    ) -> std::io::Result<()> {
-        writeln!(
-            self.file,
-            "{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{:.3},{:.3},{:.3},{:.3}",
-            t, dt, v_des, left, right, dist, state, meas_left, meas_right, err, gain
-        )?;
-        Ok(())
-    }
 
     pub fn flush(&mut self) -> std::io::Result<()> {
         self.file.flush()
+    }
+}
+
+impl TelemetrySink for TelemetryWriter {
+    fn record(&mut self, sample: &TelemetrySample) -> std::io::Result<()> {
+        writeln!(
+            self.file,
+            "{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{:.3},{:.3},{:.3},{:.3}",
+            sample.t,
+            sample.dt,
+            sample.desired_v,
+            sample.left,
+            sample.right,
+            sample.distance,
+            sample.state,
+            sample.meas_left,
+            sample.meas_right,
+            sample.err,
+            sample.adapt_gain
+        )
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        TelemetryWriter::flush(self)
     }
 }
 

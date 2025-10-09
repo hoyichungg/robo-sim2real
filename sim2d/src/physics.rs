@@ -15,9 +15,9 @@ pub fn integrate_kinematics(
     };
 
     // --- 一階系統：命令 → 量測 ---
-    let tau = cfg.tau.max(1e-4);
+    let tau = cfg.runtime.plant.tau.max(1e-4);
     let alpha = 1.0 - (-clk.dt / tau).exp();
-    let v_cmd = cfg.plant_gain * vel.cmd; // 命令經過 plant_gain
+    let v_cmd = cfg.runtime.plant.gain * vel.cmd; // 命令經過 plant_gain
     let v_meas = vel.meas + alpha * (v_cmd - vel.meas);
     vel.meas = v_meas;
 

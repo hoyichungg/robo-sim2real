@@ -1,18 +1,20 @@
 use clap::Parser;
 use drivers::mock::{MockMotor, MockSensor};
 use r2_core::config::control::{ControlConfig, ControlOverrides};
+use r2_core::config::runtime::{RuntimeConfig, RuntimeOverrides};
 use r2_core::control::controller::{Controller, DifferentialKinematics};
+use r2_core::control::telemetry::{TelemetrySample, TelemetrySink};
 use r2_core::hal::{DistanceSensor, Motor};
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod profile;
-use profile::{ProfileParams, VProfile};
+use profile::VProfile;
 
 mod adaptive;
-use adaptive::map_gain;
+
+mod telemetry;
+use telemetry::CsvTelemetrySink;
 
 /// Run the minimal control loop (PID + FailSafe) with mock drivers.
 #[derive(Parser, Debug)]
@@ -115,18 +117,45 @@ impl Args {
         overrides.adaptive.gain_max = Some(self.gain_max);
         overrides
     }
+
+    fn runtime_overrides(&self) -> RuntimeOverrides {
+        use r2_core::config::runtime::{LoopOverrides, PlantOverrides, ProfileOverrides};
+
+        let mut overrides = RuntimeOverrides::default();
+        overrides.loop_cfg = LoopOverrides {
+            hz: Some(self.hz),
+            desired_v: Some(self.desired_v),
+        };
+
+        let mut profile = ProfileOverrides::default();
+        if let Some(kind) = self.v_profile {
+            profile.profile = Some(Some(kind.into()));
+        }
+        if let Some(step) = self.step_at {
+            profile.step_at = Some(step);
+        }
+        if let Some(amp) = self.sin_amp {
+            profile.sin_amp = Some(amp);
+        }
+        if let Some(freq) = self.sin_freq {
+            profile.sin_freq = Some(freq);
+        }
+        if let Some(bias) = self.sin_bias {
+            profile.sin_bias = Some(bias);
+        }
+        overrides.profile = profile;
+
+        overrides.plant = PlantOverrides {
+            tau: Some(self.bench_tau),
+            gain: Some(self.bench_gain),
+        };
+
+        overrides
+    }
 }
 
 fn main() {
     let args = Args::parse();
-
-    // 把 Step/Sin 參數集中
-    let params = ProfileParams {
-        step_at: args.step_at.unwrap_or(1.0),
-        sin_amp: args.sin_amp.unwrap_or(0.3),
-        sin_freq: args.sin_freq.unwrap_or(0.2),
-        sin_bias: args.sin_bias.unwrap_or(0.4),
-    };
 
     let mut motor = MockMotor;
     let mut sensor = MockSensor::default();
@@ -136,10 +165,16 @@ fn main() {
     let pid = control_cfg.build_pid();
     let kin = DifferentialKinematics { wheel_base_m: 0.22 };
     let safety = control_cfg.build_failsafe();
-    let adaptive_cfg = control_cfg.adaptive;
+    let mut gain_sched = control_cfg.adaptive.build_scheduler();
     let mut ctrl = Controller::new(pid, kin, safety);
 
-    let hz = args.hz.max(1.0);
+    let mut runtime_cfg = RuntimeConfig::builder()
+        .apply(&args.runtime_overrides())
+        .build();
+    runtime_cfg.loop_cfg.hz = runtime_cfg.loop_cfg.hz.max(1.0);
+    runtime_cfg.plant.tau = runtime_cfg.plant.tau.max(1e-3);
+
+    let hz = runtime_cfg.loop_cfg.hz;
     let dt = Duration::from_secs_f32(1.0 / hz);
     let t0 = Instant::now();
     let mut last = t0;
@@ -147,24 +182,15 @@ fn main() {
     // bench 模式的內部狀態
     let mut v_meas_l = 0.0f32;
     let mut v_meas_r = 0.0f32;
-    let tau = args.bench_tau.max(1e-3); // 避免 0
-    let gain = args.bench_gain;
+    let tau = runtime_cfg.plant.tau;
+    let gain = runtime_cfg.plant.gain;
 
     // === 準備 CSV Writer ===
     let csv_path = args
         .csv
         .clone()
         .unwrap_or_else(|| PathBuf::from("run/telemetry.csv"));
-    if let Some(parent) = csv_path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).expect("failed to create CSV parent dir");
-    }
-    let file = File::create(&csv_path).expect("cannot create telemetry csv");
-    let mut writer = BufWriter::new(file);
-    writeln!(
-        writer,
-        "t,dt,desired_v,left,right,distance,state,meas_left,meas_right,err,adapt_gain"
-    )
-    .expect("write csv header");
+    let mut telemetry = CsvTelemetrySink::create(&csv_path).expect("cannot create telemetry csv");
 
     let steps = (hz * args.seconds).round() as usize;
     for _ in 0..steps {
@@ -173,8 +199,10 @@ fn main() {
         last = now;
         let t_sec = (now - t0).as_secs_f32();
 
-        // 期望速度（從模組計算）
-        let desired_v = profile::desired_v(args.v_profile, params, args.desired_v, t_sec);
+        // 期望速度（從 core 計算）
+        let desired_v = runtime_cfg
+            .profile
+            .sample(runtime_cfg.loop_cfg.desired_v, t_sec);
 
         // 感測 + 控制
         let dist_val = sensor.distance_m().map_err(|_| ());
@@ -196,20 +224,9 @@ fn main() {
             gain * 0.5 * (l_raw + r_raw)
         };
         let ctrl_err = desired_v - v_meas_avg;
-        let abs_e = ctrl_err.abs();
 
-        // 自適應輸出增益（未開啟則為 1.0）
-        let adapt = if adaptive_cfg.enabled {
-            map_gain(
-                abs_e,
-                adaptive_cfg.e_small,
-                adaptive_cfg.e_large,
-                adaptive_cfg.gain_min,
-                adaptive_cfg.gain_max,
-            )
-        } else {
-            1.0
-        };
+        // 自適應輸出增益（未啟用時會回傳 1.0）
+        let adapt = gain_sched.update(ctrl_err);
 
         // 實際下給馬達的命令（已套用自適應）並夾限
         let l_cmd = (l_raw * adapt).clamp(-1.0, 1.0);
@@ -230,20 +247,29 @@ fn main() {
 
         // 記錄：把 err / adapt_gain 一併寫入
         let state_str = format!("{:?}", st);
-        let ml = if args.bench { v_meas_l } else { f32::NAN };
-        let mr = if args.bench { v_meas_r } else { f32::NAN };
-        if let Err(io_err) = writeln!(
-            writer,
-            "{:.3},{:.3},{:.2},{:.2},{:.2},{:.2},{},{:.3},{:.3},{:.4},{:.3}",
-            t_sec, dt_s, desired_v, l_cmd, r_cmd, dist_dbg, state_str, ml, mr, ctrl_err, adapt
-        ) {
+        let meas_left = if args.bench { v_meas_l } else { f32::NAN };
+        let meas_right = if args.bench { v_meas_r } else { f32::NAN };
+        let sample = TelemetrySample {
+            t: t_sec,
+            dt: dt_s,
+            desired_v,
+            left: l_cmd,
+            right: r_cmd,
+            distance: dist_dbg,
+            state: state_str,
+            meas_left,
+            meas_right,
+            err: ctrl_err,
+            adapt_gain: adapt,
+        };
+        if let Err(io_err) = telemetry.record(&sample) {
             eprintln!("failed to write telemetry: {io_err}");
         }
 
         std::thread::sleep(dt);
     }
 
-    if let Err(err) = writer.flush() {
+    if let Err(err) = telemetry.flush() {
         eprintln!("failed to flush telemetry csv: {err}");
     }
 

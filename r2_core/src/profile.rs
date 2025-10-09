@@ -6,6 +6,10 @@ pub enum VProfile {
     Sin,
 }
 
+pub trait VelocityProfile {
+    fn sample(&self, params: ProfileParams, desired_v_const: f32, t: f32) -> f32;
+}
+
 /// 各曲線的參數（用在 Step/Sin）
 #[derive(Debug, Clone, Copy)]
 pub struct ProfileParams {
@@ -26,6 +30,45 @@ impl Default for ProfileParams {
     }
 }
 
+impl VelocityProfile for VProfile {
+    fn sample(&self, params: ProfileParams, desired_v_const: f32, t: f32) -> f32 {
+        match self {
+            VProfile::Const => desired_v_const,
+            VProfile::Step => {
+                if t >= params.step_at {
+                    desired_v_const
+                } else {
+                    0.0
+                }
+            }
+            VProfile::Sin => {
+                params.sin_bias
+                    + params.sin_amp * (std::f32::consts::TAU * params.sin_freq * t).sin()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ProfileExecutor {
+    kind: Option<VProfile>,
+}
+
+impl ProfileExecutor {
+    pub fn new(kind: Option<VProfile>) -> Self {
+        Self { kind }
+    }
+}
+
+impl VelocityProfile for ProfileExecutor {
+    fn sample(&self, params: ProfileParams, desired_v_const: f32, t: f32) -> f32 {
+        match self.kind {
+            None => desired_v_const,
+            Some(profile) => profile.sample(params, desired_v_const, t),
+        }
+    }
+}
+
 /// 計算當前時間的期望速度
 /// - `profile`: 曲線種類（None 代表 Const）
 /// - `params`: 曲線參數
@@ -37,19 +80,7 @@ pub fn desired_v(
     desired_v_const: f32,
     t: f32,
 ) -> f32 {
-    match profile {
-        None | Some(VProfile::Const) => desired_v_const,
-        Some(VProfile::Step) => {
-            if t >= params.step_at {
-                desired_v_const
-            } else {
-                0.0
-            }
-        }
-        Some(VProfile::Sin) => {
-            params.sin_bias + params.sin_amp * (std::f32::consts::TAU * params.sin_freq * t).sin()
-        }
-    }
+    ProfileExecutor::new(profile).sample(params, desired_v_const, t)
 }
 
 #[cfg(test)]

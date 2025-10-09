@@ -11,60 +11,163 @@ use crate::rpi::{RpiDistanceStub, RpiMotorStub};
 pub type MotorHandle = Box<dyn Motor>;
 pub type DistanceHandle = Box<dyn DistanceSensor>;
 
+use std::any::Any;
+use std::collections::HashMap;
+
+/// 可擴充的 Driver 集合。預設提供 motor/distance，也能透過 extras 保留自訂裝置。
+pub struct DriverSet {
+    motor: Option<MotorHandle>,
+    distance: Option<DistanceHandle>,
+    extras: HashMap<&'static str, Box<dyn Any + Send>>,
+}
+
+impl DriverSet {
+    pub fn new() -> Self {
+        Self {
+            motor: None,
+            distance: None,
+            extras: HashMap::new(),
+        }
+    }
+
+    pub fn set_motor(&mut self, motor: MotorHandle) {
+        self.motor = Some(motor);
+    }
+
+    pub fn set_distance(&mut self, distance: DistanceHandle) {
+        self.distance = Some(distance);
+    }
+
+    pub fn insert_extra(&mut self, key: &'static str, handle: Box<dyn Any + Send>) {
+        self.extras.insert(key, handle);
+    }
+
+    pub fn extra<T: 'static>(&self, key: &str) -> Option<&T> {
+        self.extras
+            .get(key)
+            .and_then(|boxed| boxed.downcast_ref::<T>())
+    }
+
+    pub fn into_handles(self) -> Result<DriverHandles, String> {
+        let motor = self
+            .motor
+            .ok_or_else(|| "driver factory did not produce a motor handle".to_string())?;
+        let distance = self
+            .distance
+            .ok_or_else(|| "driver factory did not produce a distance handle".to_string())?;
+        Ok(DriverHandles { motor, distance })
+    }
+}
+
+impl Default for DriverSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Named collection of driver handles returned by the factory.
 pub struct DriverHandles {
     pub motor: MotorHandle,
     pub distance: DistanceHandle,
 }
 
-pub struct DriverFactory;
+pub trait DeviceBuilder: Send + Sync {
+    fn build(&self, cfg: &DriverConfig, set: &mut DriverSet) -> Result<(), String>;
+}
 
-impl DriverFactory {
-    pub fn create_motor(cfg: &MotorBackend) -> Result<MotorHandle, String> {
-        match cfg {
-            MotorBackend::Mock => Ok(Box::new(MockMotor) as Box<dyn Motor>),
-            MotorBackend::Bench(..) => {
-                // bench 模式仍沿用 mock motor，實際 bench 模型由呼叫端模擬
-                Ok(Box::new(MockMotor) as Box<dyn Motor>)
+struct MotorBuilder;
+
+impl DeviceBuilder for MotorBuilder {
+    fn build(&self, cfg: &DriverConfig, set: &mut DriverSet) -> Result<(), String> {
+        let handle: MotorHandle = match &cfg.motor {
+            MotorBackend::Mock => Box::new(MockMotor),
+            MotorBackend::Bench(bench_cfg) => {
+                set.insert_extra("bench_motor", Box::new(*bench_cfg));
+                Box::new(MockMotor)
             }
             MotorBackend::Rpi(rpi_cfg) => {
                 #[cfg(feature = "rpi")]
                 {
-                    RpiMotor::new(*rpi_cfg).map(|m| Box::new(m) as Box<dyn Motor>)
+                    Box::new(RpiMotor::new(*rpi_cfg)?)
                 }
                 #[cfg(not(feature = "rpi"))]
                 {
                     let _ = rpi_cfg;
-                    Ok(Box::new(RpiMotorStub) as Box<dyn Motor>)
+                    Box::new(RpiMotorStub)
                 }
             }
-        }
+        };
+        set.set_motor(handle);
+        Ok(())
     }
+}
 
-    pub fn create_distance(cfg: &DistanceBackend) -> Result<DistanceHandle, String> {
-        match cfg {
-            DistanceBackend::Mock => Ok(Box::new(MockSensor::default()) as Box<dyn DistanceSensor>),
+struct DistanceBuilder;
+
+impl DeviceBuilder for DistanceBuilder {
+    fn build(&self, cfg: &DriverConfig, set: &mut DriverSet) -> Result<(), String> {
+        let handle: DistanceHandle = match &cfg.distance {
+            DistanceBackend::Mock => Box::new(MockSensor::default()),
             DistanceBackend::RpiHcsr04 {
                 trig_gpio,
                 echo_gpio,
             } => {
                 #[cfg(feature = "rpi")]
                 {
-                    RpiDistance::new(*trig_gpio, *echo_gpio)
-                        .map(|d| Box::new(d) as Box<dyn DistanceSensor>)
+                    Box::new(RpiDistance::new(*trig_gpio, *echo_gpio)?)
                 }
                 #[cfg(not(feature = "rpi"))]
                 {
                     let _ = (trig_gpio, echo_gpio);
-                    Ok(Box::new(RpiDistanceStub) as Box<dyn DistanceSensor>)
+                    Box::new(RpiDistanceStub)
                 }
             }
+        };
+        set.set_distance(handle);
+        Ok(())
+    }
+}
+
+pub struct DriverFactory {
+    builders: Vec<Box<dyn DeviceBuilder>>,
+}
+
+impl DriverFactory {
+    pub fn new() -> Self {
+        Self {
+            builders: Vec::new(),
         }
     }
 
+    pub fn with_defaults() -> Self {
+        let mut factory = Self::new();
+        factory.register(MotorBuilder);
+        factory.register(DistanceBuilder);
+        factory
+    }
+
+    pub fn register<B>(&mut self, builder: B)
+    where
+        B: DeviceBuilder + 'static,
+    {
+        self.builders.push(Box::new(builder));
+    }
+
+    pub fn build(&self, cfg: &DriverConfig) -> Result<DriverSet, String> {
+        let mut set = DriverSet::default();
+        for builder in &self.builders {
+            builder.build(cfg, &mut set)?;
+        }
+        Ok(set)
+    }
+
     pub fn create_all(cfg: &DriverConfig) -> Result<DriverHandles, String> {
-        let motor = Self::create_motor(&cfg.motor)?;
-        let distance = Self::create_distance(&cfg.distance)?;
-        Ok(DriverHandles { motor, distance })
+        Self::with_defaults().build(cfg)?.into_handles()
+    }
+}
+
+impl Default for DriverFactory {
+    fn default() -> Self {
+        Self::with_defaults()
     }
 }
